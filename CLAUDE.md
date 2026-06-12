@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**VibeCAD** — local-first, agent-native desktop app for 3D parametric CAD. Wraps Claude Code / OpenCode / Codex (agent axis) over OpenSCAD or build123d (modeling axis). Full spec: `openscad-studio-spec-v0.2.md`. (Product name "VibeCAD" but db/env use the `vibecad`/`VIBECAD` prefix.)
+**VibeCAD** — local-first, agent-native desktop app for 3D parametric CAD. Wraps Claude Code / OpenCode / Codex (agent axis) over OpenSCAD or build123d (modeling axis). Full spec: `openscad-studio-spec-v0.2.md`. (Product name "VibeCAD" but db/env use the `vibecad`/`VIBECAD` prefix; legacy `studio`/`openscad-studio` names also linger — the project root on disk is `~/openscad-studio/projects/<id>`, the file protocol is `studio://`, and per-project skills copy to `<dir>/.studio/skills/<backend>`.)
 
 ## Commands
 
@@ -16,18 +16,20 @@ npm run dev:desktop  # concurrently: renderer (vite) + electron tsup --watch + e
 npm run dev:renderer # vite only
 npm run build        # rebuild native deps → renderer vite build → electron-builder (.dmg/.exe/.AppImage)
 npm run typecheck    # tsc --noEmit across both workspaces
+npm run test         # vitest run (tests/*.test.ts, node env, @shared alias)
 npm run db:generate  # drizzle-kit generate (migrations → electron/src/main/db/migrations)
 npm run db:push      # drizzle-kit push
 npm run db:studio    # drizzle-kit studio
 ```
 
-Per-workspace: `npm run <script> --workspace electron|renderer` (e.g. `make:mac`, `make:win`, `make:linux`). No test runner is wired yet (`bun test` in spec is aspirational).
+Per-workspace: `npm run <script> --workspace electron|renderer` (e.g. `make:mac`, `make:win`, `make:linux`). Tests live in root `tests/` and exercise pure logic only (`extractParams`, `pickBackend`, `parseEvent`, `preview`) — no Electron/DB harness. Run one file with `npx vitest run tests/<name>.test.ts`.
 
 **Native-deps gotcha:** `better-sqlite3` is a native module rebuilt for Electron's ABI by `scripts/ensure-electron-native-deps.mjs`, which runs before `dev:desktop`, `build`, `start`, and `package`. If SQLite throws `NODE_MODULE_VERSION` errors, run that script.
 
 ## Stack
 
 - **Electron 41** main/preload bundled by **tsup** (CJS, `node22`), **React 19** + **Zustand** renderer bundled by **Vite 7** + **Tailwind v4**.
+- Renderer 3D: **three.js** (r0.169) + **react-resizable-panels** + **opencascade.js** (OCCT WASM, STEP→mesh in-browser).
 - **better-sqlite3 + Drizzle ORM** (sqlite). `initDb()` opens WAL + `foreign_keys=ON` and runs migrations on boot (silently skipped if the migrations folder is absent — generate them first).
 - DB path: `VIBECAD_DB_PATH` env, else `app.getPath("userData")/vibecad.sqlite`.
 - **Zod 4** for runtime validation (shared dep).
@@ -38,17 +40,25 @@ Per-workspace: `npm run <script> --workspace electron|renderer` (e.g. `make:mac`
 ```
 electron/src/
   main/
-    index.ts         # app boot, BrowserWindow, CSP, ALL ipcMain handlers
+    index.ts         # app boot, BrowserWindow, CSP, studio:// protocol, ALL ipcMain handlers
+    projects.ts      # project lifecycle (create/list/rename/delete + skill copy into project)
+    chat.ts          # session/message persistence (one session per project; resume id mgmt)
     workspace.ts     # fs.watch per project dir → workspace:changed
+    paths.ts         # getSkillsDir/getSkillsBase (resolves bundled skills/ in dev vs packaged)
+    spawn-env.ts     # cleanSpawnEnv() — strips macOS GUI vars so spawned CLIs run headless
     agents/          # AgentAdapter per CLI (claude-code, opencode, codex) + index registry
-    modeling/        # ModelingBackend per engine (openscad, build123d) + index registry
-    db/{schema,index}.ts
+    modeling/        # ModelingBackend per engine (openscad, build123d) + resolve-openscad + index
+    db/{schema,index}.ts + migrations/
   preload/index.ts   # contextBridge → window.api (the ONLY renderer↔main surface)
 renderer/src/
   App.tsx            # 3-panel shell; subscribes to push events
-  components/        # Chat, Preview, WorkspaceTree, ExportBar, NewProjectDialog, Settings
-  stores/            # agent, backend, project, session (Zustand)
-shared/              # ipc.ts (payload TYPES) + types.ts (interfaces, enums) — imported by both sides
+  components/        # Chat, Preview/, WorkspaceTree, ExportBar, NewProjectDialog, Settings,
+                     #   ProjectSwitcher, SourceViewer, ui/ (cn-based primitives)
+  components/Preview/# viewer.ts + viewerThree.ts (three.js scene) + viewerQuality.ts + ParamPanel.tsx
+  lib/               # loadStep.ts (opencascade.js OCCT WASM → three.js geom), studio.ts, cn.ts
+  stores/            # agent, backend, project, session, view, viewport, preview (Zustand)
+shared/              # ipc.ts (payload TYPES) + types.ts (interfaces, enums) + backend-select.ts
+                     #   (pickBackend from output-need) — imported by both sides
 skills/{openscad,build123d}/   # SKILL.md (+ build123d render_harness.py)
 ```
 
@@ -78,14 +88,21 @@ Add a new agent/backend = implement the interface in `main/agents/` or `main/mod
 
 `window.api` (preload) is the only bridge — renderer never touches `ipcRenderer` directly, and there is no `nodeIntegration`. **Channel-name strings are literals in `main/index.ts` and `preload/index.ts`; `shared/ipc.ts` holds only the payload _types_** (the spec's claim that all channel names live there is not yet true — keep the two sides in sync by hand).
 
-- Renderer→Main (`invoke`/`handle`): `agent:detect`, `agent:run`, `agent:stop`, `backend:detect`, `model:export`, `model:open`, `app:get-versions`, `window:set-overlay-theme`.
-- Main→Renderer (`send`/`on`): `agent:event` (streamed per stdout line via `adapter.parseEvent`), `workspace:changed` (fs.watch). `preview:updated` is wired through preload + `App.tsx` but **not yet emitted by main**.
+- Renderer→Main (`invoke`/`handle`): agent (`agent:detect`, `agent:run`, `agent:stop`), chat (`chat:history`, `chat:pick-images`, `chat:save-attachment`), backend (`backend:detect`), model (`model:export`, `model:extract-params`, `model:set-param`, `model:preview-mesh`, `model:read`, `model:import-step`), `shell:reveal`, project (`project:create`/`list`/`open`/`rename`/`set-agent`/`set-model`/`delete`), `app:get-versions`, `window:set-overlay-theme`.
+- Main→Renderer (`send`/`on`): `agent:event` (per stdout line via `adapter.parseEvent`), `workspace:changed` (fs.watch), `preview:mesh-ready` `{projectId, meshPath}` and `preview:error` `{projectId, message}` (emitted by `exportPreviewMesh`/`renderLatest`). `preview:updated` is still exposed in preload (`onPreviewUpdated`) but **never emitted by main** — dead path; ignore it.
 
-`agent:run` loads the project row to resolve agent + backend + working dir, spawns the adapter, and forwards each stdout line as an `agent:event` until close.
+`agent:run` loads the project row to resolve agent + backend + working dir, spawns the adapter, persists the turn via `chat.ts`, and forwards each stdout line as an `agent:event` until close. Chat history survives reload (sessions + messages tables; one session per project; `--resume` id reset when the agent is changed).
 
 ## Rendering / preview reality
 
-`ModelingBackend.render()` exists but is **not wired to any IPC channel**. In the current flow the **agent/skill** runs OpenSCAD itself (per `skills/openscad/SKILL.md`: write `model_NNN.scad`, render front/top/iso PNGs, validate). The app surfaces results by watching the project dir (`workspace.ts` → `workspace:changed`) and re-reading files — it does not call `render()`. Treat `render()`/`preview:updated` as the intended-but-incomplete path.
+`render()` is now wired. The main process **exports the preview mesh itself** — `exportPreviewMesh()` calls `backend.export()` headlessly and pushes `preview:mesh-ready` to the renderer (triggered by `model:preview-mesh`, by a `set-param` edit, or by `renderLatest` after the watcher sees a new `model_NNN`). All exports run headless (no GL → no OpenSCAD GUI crash, see `spawn-env.ts`).
+
+Per backend:
+
+- **OpenSCAD** → STL. Renderer loads it with three.js `STLLoader`.
+- **build123d** → STEP (precise B-rep, used as the preview) **and** STL (always-present print mesh). The renderer tessellates the STEP **client-side** via `lib/loadStep.ts` — the full OpenCascade (OCCT) kernel compiled to WASM (`opencascade.js`, ~50 MB wasm, init once and reused). It extracts faces (winding-corrected) plus true B-rep edge curves, falling back to three.js `EdgesGeometry` if edge extraction fails.
+
+Project files reach the renderer over the custom **`studio://local/<urlencoded-abs-path>`** protocol (registered privileged before `app.ready`) — the renderer's origin can't load `file://` under `webSecurity`. The agent/skill still also writes its own PNGs (per `SKILL.md`), surfaced via the watcher.
 
 ## Agent invocation notes
 
