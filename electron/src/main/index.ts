@@ -26,6 +26,7 @@ import {
   registerActive,
 } from "./agents/index.js";
 import { detectBackends, getBackend } from "./modeling/index.js";
+import { resolveOpenscad } from "./modeling/resolve-openscad.js";
 import { initDb } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import {
@@ -47,6 +48,8 @@ import type {
   RunAgentPayload,
   StopAgentPayload,
   ExportModelPayload,
+  ExtractParamsPayload,
+  SetParamPayload,
   PreviewMeshPayload,
   ReadModelPayload,
   RevealPayload,
@@ -71,6 +74,7 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       stream: true,
+      corsEnabled: true,
     },
   },
 ]);
@@ -249,6 +253,14 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
 
   const skillsDir = getSkillsDir(project.modelingBackend);
 
+  // Expose the resolved OpenSCAD binary so the agent's headless validation
+  // works even when OpenSCAD isn't on PATH (the skill reads $OPENSCAD_BIN).
+  const env: Record<string, string> = {};
+  if (project.modelingBackend === "openscad") {
+    const osc = await resolveOpenscad();
+    if (osc) env["OPENSCAD_BIN"] = osc;
+  }
+
   // Persist the user turn + resolve a resumable session.
   const session = getOrCreateSession(projectId, project.agentId);
   insertMessage(session.id, "user", prompt);
@@ -258,6 +270,7 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     workingDir: project.dir,
     skillsDir,
     sessionId: session.agentSessionId ?? undefined,
+    env,
   });
   registerActive(projectId, adapter.id, child);
 
@@ -451,6 +464,96 @@ ipcMain.handle("model:read", async (_e, payload: ReadModelPayload) => {
   return readFile(abs, "utf8");
 });
 
+/** Resolve the model source path for a param request (active or latest). */
+async function paramModelPath(
+  projectId: string,
+  modelPath?: string,
+): Promise<{ project: ProjectRow; path: string }> {
+  const project = getProject(projectId);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  const path = modelPath ?? (await latestModel(project));
+  if (!path) throw new Error("No model to inspect");
+  if (!isInsideWorkspace(resolve(path)))
+    throw new Error("Path outside workspace");
+  return { project, path };
+}
+
+ipcMain.handle(
+  "model:extract-params",
+  async (_e, payload: ExtractParamsPayload) => {
+    const { project, path } = await paramModelPath(
+      payload.projectId,
+      payload.modelPath,
+    );
+    const backend = getBackend(project.modelingBackend);
+    if (!backend) return [];
+    const source = await readFile(path, "utf8");
+    return backend.extractParams(source);
+  },
+);
+
+/** Render a JS value back into source syntax (shared by .scad and .py). */
+function formatParamValue(v: number | string | boolean): string {
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "number") return String(v);
+  return JSON.stringify(v); // quoted string
+}
+
+/** Replace only the RHS value on `lineIdx`, preserving any trailing comment. */
+function patchSourceLine(
+  source: string,
+  lineIdx: number,
+  ext: ".scad" | ".py",
+  formatted: string,
+): string | null {
+  const lines = source.split("\n");
+  const line = lines[lineIdx];
+  if (line === undefined) return null;
+  const eq = line.indexOf("=");
+  if (eq === -1) return null;
+  const prefix = line.slice(0, eq + 1).trimEnd();
+  const rest = line.slice(eq + 1);
+  if (ext === ".scad") {
+    const semi = rest.indexOf(";");
+    if (semi === -1) return null;
+    lines[lineIdx] = `${prefix} ${formatted}${rest.slice(semi)}`;
+  } else {
+    const hash = rest.indexOf("#");
+    const tail = hash === -1 ? "" : `  ${rest.slice(hash)}`;
+    lines[lineIdx] = `${prefix} ${formatted}${tail}`;
+  }
+  return lines.join("\n");
+}
+
+ipcMain.handle("model:set-param", async (_e, payload: SetParamPayload) => {
+  const { project, path } = await paramModelPath(
+    payload.projectId,
+    payload.modelPath,
+  );
+  const backend = getBackend(project.modelingBackend);
+  if (!backend) throw new Error(`Backend not available`);
+  const original = await readFile(path, "utf8");
+  const params = await backend.extractParams(original);
+  const param = params.find((p) => p.name === payload.name);
+  if (!param) throw new Error(`Parameter not found: ${payload.name}`);
+  const patched = patchSourceLine(
+    original,
+    param.line,
+    backend.sourceExt,
+    formatParamValue(payload.value),
+  );
+  if (patched === null) throw new Error(`Could not patch ${payload.name}`);
+  await writeFile(path, patched, "utf8");
+  // Guard: revert if the edit breaks parsing/evaluation (build123d esp.).
+  const validation = await backend.validate(path);
+  if (!validation.ok) {
+    await writeFile(path, original, "utf8");
+    return { ok: false, errors: validation.errors };
+  }
+  await exportPreviewMesh(payload.projectId, path);
+  return { ok: true, errors: [] };
+});
+
 ipcMain.handle("shell:reveal", (_e, payload: RevealPayload) => {
   shell.showItemInFolder(resolve(payload.path));
 });
@@ -515,7 +618,16 @@ function registerStudioProtocol(): void {
     if (!isInsideWorkspace(abs)) {
       return new Response("Forbidden", { status: 403 });
     }
-    return net.fetch(pathToFileURL(abs).toString());
+    return net.fetch(pathToFileURL(abs).toString()).then((res) => {
+      // Renderer origin (http://127.0.0.1:1420) fetches this cross-origin.
+      const headers = new Headers(res.headers);
+      headers.set("Access-Control-Allow-Origin", "*");
+      return new Response(res.body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers,
+      });
+    });
   });
 }
 

@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import type { AgentEvent, DetectedAgent } from "@shared/types";
+import { useProjectStore } from "./project.store";
+import { latestModelBase } from "./preview";
 
 export interface ToolCard {
   id: string;
@@ -9,6 +11,14 @@ export interface ToolCard {
   isError?: boolean;
 }
 
+/** A model produced by an assistant turn, surfaced inline in the chat. */
+export interface ResultRef {
+  modelBase: string;
+  // Absolute path to a render thumbnail (iso/front/top png), if one exists.
+  thumbPath?: string;
+  hasStl: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -16,6 +26,25 @@ export interface ChatMessage {
   tools: ToolCard[];
   status: "streaming" | "done" | "error";
   attachments?: string[];
+  result?: ResultRef;
+}
+
+/** Snapshot the active project's newest model as an inline result, if any. */
+function captureResult(): ResultRef | undefined {
+  const project = useProjectStore.getState().activeProject;
+  if (!project) return undefined;
+  const base = latestModelBase(project.files);
+  if (!base) return undefined;
+  const thumb = ["iso", "front", "top"]
+    .map((a) => `${base}_${a}.png`)
+    .find((f) => project.files.includes(f));
+  const hasStl = project.files.includes(`${base}.stl`);
+  if (!thumb && !hasStl) return undefined;
+  return {
+    modelBase: base,
+    thumbPath: thumb ? `${project.dir}/${thumb}` : undefined,
+    hasStl,
+  };
 }
 
 interface RunPayload {
@@ -34,6 +63,9 @@ interface AgentStore {
   stop(projectId: string): Promise<void>;
   pushEvent(event: AgentEvent): void;
   loadHistory(projectId: string): Promise<void>;
+  // Back-fill the last assistant turn's inline result once its files land
+  // (the agent's render PNG/STL may appear after the `done` event).
+  refreshLastResult(): void;
   clear(): void;
 }
 
@@ -178,13 +210,19 @@ export const useAgentStore = create<AgentStore>((set, get) => {
             })),
           }));
           return;
-        case "done":
+        case "done": {
           flushText();
+          const result = captureResult();
           set((s) => ({
             running: false,
-            messages: patchLast(s.messages, (m) => ({ ...m, status: "done" })),
+            messages: patchLast(s.messages, (m) => ({
+              ...m,
+              status: "done",
+              result: result ?? m.result,
+            })),
           }));
           return;
+        }
         case "error":
           flushText();
           set((s) => ({
@@ -215,6 +253,20 @@ export const useAgentStore = create<AgentStore>((set, get) => {
             status: "done" as const,
           })),
       });
+    },
+
+    refreshLastResult() {
+      const last = [...get().messages]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      if (!last || last.status === "streaming" || last.result) return;
+      const result = captureResult();
+      if (!result) return;
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === last.id ? { ...m, result } : m,
+        ),
+      }));
     },
 
     clear() {

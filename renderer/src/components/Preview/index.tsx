@@ -1,22 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { useBackendStore } from "../../stores/backend.store";
 import { useProjectStore } from "../../stores/project.store";
+import { useAgentStore } from "../../stores/agent.store";
 import { useViewStore } from "../../stores/view.store";
 import { studioUrl } from "../../lib/studio";
+import { ActionButton, Divider, ToolbarButton } from "../ui";
+import { ParamPanel } from "./ParamPanel";
+import { Viewer } from "./viewer";
 import type { Project } from "../../stores/project.store";
 import type { CameraPreset, ExportFormat } from "@shared/types";
 
 const CAMERAS: CameraPreset[] = ["front", "top", "iso"];
 
-// Unit camera directions per preset; scaled to the model's bounding sphere.
-const DIRS: Record<CameraPreset, [number, number, number]> = {
-  front: [0, 0, 1],
-  top: [0, 1, 0.0001],
-  iso: [1, 0.8, 1],
-};
+/** Trim a measurement to ≤2 decimals without trailing zeros. */
+function fmt(n: number): string {
+  return Number(n.toFixed(2)).toString();
+}
 
 interface Props {
   project: Project | null;
@@ -28,10 +28,22 @@ export function Preview({ project }: Props) {
   const [rendering, setRendering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [empty, setEmpty] = useState(true);
+  const [showEdges, setShowEdges] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
+  const [dims, setDims] = useState<{ x: number; y: number; z: number } | null>(
+    null,
+  );
+  const [gridCell, setGridCell] = useState(0);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  // Track which model the viewer currently holds, so a re-render of the SAME
+  // model (param tweak / Re-render) preserves the camera instead of re-framing.
+  const loadedPathRef = useRef<string | null>(null);
 
   const backends = useBackendStore((s) => s.detected);
   const backend = backends.find((b) => b.id === project?.modelingBackend);
   const meshVersion = useProjectStore((s) => s.meshVersion);
+  const agentRunning = useAgentStore((s) => s.running);
 
   const stlPath =
     project && project.activeModel
@@ -60,11 +72,16 @@ export function Preview({ project }: Props) {
     if (!viewer) return;
     if (!stlPath || !hasStl) {
       viewer.clear();
+      loadedPathRef.current = null;
       setEmpty(true);
+      setDims(null);
       return;
     }
     let cancelled = false;
     setError(null);
+    // Re-frame only when switching to a different model; keep the view on
+    // re-renders of the current one.
+    const resetCamera = loadedPathRef.current !== stlPath;
     fetch(studioUrl(stlPath))
       .then((r) => {
         if (!r.ok) throw new Error(`load failed (${r.status})`);
@@ -72,8 +89,11 @@ export function Preview({ project }: Props) {
       })
       .then((buf) => {
         if (cancelled) return;
-        viewer.setGeometry(new STLLoader().parse(buf));
+        viewer.setGeometry(new STLLoader().parse(buf), { resetCamera });
+        loadedPathRef.current = stlPath;
         setEmpty(false);
+        setDims(viewer.getBounds());
+        setGridCell(viewer.getGridCell());
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -82,6 +102,21 @@ export function Preview({ project }: Props) {
       cancelled = true;
     };
   }, [stlPath, hasStl, meshVersion]);
+
+  useEffect(() => {
+    viewerRef.current?.setEdgesVisible(showEdges);
+  }, [showEdges]);
+
+  useEffect(() => {
+    viewerRef.current?.setGridVisible(showGrid);
+  }, [showGrid]);
+
+  // Auto-dismiss the export toast.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   async function handleRender() {
     if (!project) return;
@@ -98,59 +133,115 @@ export function Preview({ project }: Props) {
   }
 
   async function handleExport(format: ExportFormat) {
+    setExportOpen(false);
     if (!project || !project.activeModel) return;
     const sourceExt = project.modelingBackend === "openscad" ? "scad" : "py";
     const modelPath = `${project.dir}/${project.activeModel}.${sourceExt}`;
     setError(null);
     try {
-      await window.api.exportModel({ modelPath, format });
+      const out = await window.api.exportModel({ modelPath, format });
+      setToast(`Saved ${out.slice(out.lastIndexOf("/") + 1)}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
 
+  const busy = rendering || agentRunning;
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-3 py-2 border-b border-white/10">
-        <button
-          onClick={() => useViewStore.getState().show3d()}
-          className="px-3 py-0.5 rounded text-xs font-medium bg-white/10 text-gray-100"
-        >
+        <ToolbarButton active onClick={() => useViewStore.getState().show3d()}>
           3D
-        </button>
-        <div className="w-px h-4 bg-white/10 mx-1" />
+        </ToolbarButton>
+        <Divider />
         {CAMERAS.map((cam) => (
-          <button
+          <ToolbarButton
             key={cam}
             onClick={() => viewerRef.current?.setCamera(cam)}
-            className="px-3 py-0.5 rounded text-xs font-medium text-gray-400 hover:text-gray-200"
           >
             {cam.charAt(0).toUpperCase() + cam.slice(1)}
-          </button>
+          </ToolbarButton>
         ))}
+        <Divider />
+        <ToolbarButton
+          active={showEdges}
+          onClick={() => setShowEdges((v) => !v)}
+        >
+          Edges
+        </ToolbarButton>
+        <ToolbarButton active={showGrid} onClick={() => setShowGrid((v) => !v)}>
+          Grid
+        </ToolbarButton>
         <div className="flex-1" />
-        <button
+        <ActionButton
           onClick={() => void handleRender()}
           disabled={rendering || !project}
-          className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-400 hover:border-white/30 hover:text-gray-200 disabled:opacity-40"
         >
           {rendering ? "Rendering…" : "Re-render"}
-        </button>
-        {backend?.exports.map((fmt) => (
-          <button
-            key={fmt}
-            onClick={() => void handleExport(fmt)}
-            className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-400 hover:border-white/30 hover:text-gray-200"
-          >
-            {fmt.toUpperCase()}
-          </button>
-        ))}
+        </ActionButton>
+        {backend && backend.exports.length > 0 && (
+          <div className="relative">
+            <ActionButton
+              onClick={() => setExportOpen((v) => !v)}
+              disabled={!project?.activeModel}
+            >
+              Export ▾
+            </ActionButton>
+            {exportOpen && (
+              <div className="absolute right-0 mt-1 z-10 min-w-[8rem] rounded-md border border-white/10 bg-[#161a22] shadow-xl py-1">
+                {backend.exports.map((fmt) => (
+                  <button
+                    key={fmt}
+                    onClick={() => void handleExport(fmt)}
+                    className="flex items-center gap-2 w-full px-3 py-1 text-xs text-gray-300 hover:bg-white/10"
+                  >
+                    <DownloadIcon />
+                    {fmt.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Viewport */}
       <div className="flex-1 relative bg-[#0a0d12] overflow-hidden">
         <div ref={mountRef} className="absolute inset-0" />
+
+        {project && <ParamPanel project={project} />}
+
+        {/* Dimension / scale HUD */}
+        {!empty && dims && (
+          <div className="absolute top-3 right-3 text-right pointer-events-none select-none">
+            <div className="text-xs text-gray-300 tabular-nums">
+              {fmt(dims.x)} × {fmt(dims.y)} × {fmt(dims.z)} mm
+            </div>
+            {gridCell > 0 && (
+              <div className="text-[10px] text-gray-500">
+                grid {fmt(gridCell)} mm
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Busy overlay */}
+        {busy && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-2.5 py-1 rounded-full bg-black/50 border border-white/10 text-xs text-gray-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+            {rendering ? "Rendering…" : "Working…"}
+          </div>
+        )}
+
+        {/* Export toast */}
+        {toast && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-green-500/15 border border-green-500/30 text-xs text-green-300">
+            {toast} ✓
+          </div>
+        )}
+
         {(empty || error) && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             {error ? (
@@ -176,101 +267,22 @@ export function Preview({ project }: Props) {
   );
 }
 
-/** Encapsulates the three.js scene, controls, and render loop. */
-class Viewer {
-  private renderer: THREE.WebGLRenderer;
-  private scene: THREE.Scene;
-  private camera: THREE.PerspectiveCamera;
-  private controls: OrbitControls;
-  private mesh: THREE.Mesh | null = null;
-  private radius = 1;
-  private raf = 0;
-  private ro: ResizeObserver;
-
-  constructor(private mount: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0a0d12);
-
-    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
-    this.camera.position.set(1, 0.8, 1);
-
-    this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const key = new THREE.DirectionalLight(0xffffff, 1.0);
-    key.position.set(1, 1, 1);
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.4);
-    fill.position.set(-1, -0.5, -1);
-    this.scene.add(fill);
-
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-
-    mount.appendChild(this.renderer.domElement);
-    this.ro = new ResizeObserver(() => this.resize());
-    this.ro.observe(mount);
-    this.resize();
-    this.loop();
-  }
-
-  private resize(): void {
-    const w = this.mount.clientWidth || 1;
-    const h = this.mount.clientHeight || 1;
-    this.renderer.setSize(w, h, false);
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
-  }
-
-  private loop = (): void => {
-    this.raf = requestAnimationFrame(this.loop);
-    this.controls.update();
-    this.renderer.render(this.scene, this.camera);
-  };
-
-  setGeometry(geometry: THREE.BufferGeometry): void {
-    this.clear();
-    geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
-    const sphere = geometry.boundingSphere;
-    const center = sphere?.center ?? new THREE.Vector3();
-    this.radius = sphere?.radius || 1;
-    geometry.translate(-center.x, -center.y, -center.z);
-
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x9bb4d4,
-      metalness: 0.1,
-      roughness: 0.6,
-      flatShading: false,
-    });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.scene.add(this.mesh);
-    this.setCamera("iso");
-  }
-
-  setCamera(preset: CameraPreset): void {
-    const d = this.radius * 3;
-    const [x, y, z] = DIRS[preset];
-    const len = Math.hypot(x, y, z) || 1;
-    this.camera.position.set((x / len) * d, (y / len) * d, (z / len) * d);
-    this.controls.target.set(0, 0, 0);
-    this.controls.update();
-  }
-
-  clear(): void {
-    if (!this.mesh) return;
-    this.scene.remove(this.mesh);
-    this.mesh.geometry.dispose();
-    (this.mesh.material as THREE.Material).dispose();
-    this.mesh = null;
-  }
-
-  dispose(): void {
-    cancelAnimationFrame(this.raf);
-    this.ro.disconnect();
-    this.clear();
-    this.controls.dispose();
-    this.renderer.dispose();
-    this.renderer.domElement.remove();
-  }
+function DownloadIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      className="text-gray-500"
+    >
+      <path
+        d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }

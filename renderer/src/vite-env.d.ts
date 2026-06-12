@@ -7,7 +7,13 @@ import type {
   DetectedAgent,
   DetectedBackend,
   ExportFormat,
+  Param,
 } from "@shared/types";
+
+interface SetParamResult {
+  ok: boolean;
+  errors: string[];
+}
 
 interface ProjectRecord {
   id: string;
@@ -48,6 +54,16 @@ interface ElectronAPI {
     modelPath: string;
     format: ExportFormat;
   }): Promise<string>;
+  extractParams(payload: {
+    projectId: string;
+    modelPath?: string;
+  }): Promise<Param[]>;
+  setParam(payload: {
+    projectId: string;
+    modelPath?: string;
+    name: string;
+    value: number | string | boolean;
+  }): Promise<SetParamResult>;
   previewMesh(payload: {
     projectId: string;
     modelPath?: string;

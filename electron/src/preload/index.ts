@@ -4,6 +4,9 @@ import type {
   RunAgentPayload,
   StopAgentPayload,
   ExportModelPayload,
+  ExtractParamsPayload,
+  SetParamPayload,
+  SetParamResult,
   PreviewMeshPayload,
   ReadModelPayload,
   RevealPayload,
@@ -23,6 +26,7 @@ import type {
   AgentEvent,
   DetectedAgent,
   DetectedBackend,
+  Param,
 } from "../../../shared/types.js";
 
 function on<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -52,6 +56,10 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("backend:detect"),
   exportModel: (payload: ExportModelPayload): Promise<string> =>
     ipcRenderer.invoke("model:export", payload),
+  extractParams: (payload: ExtractParamsPayload): Promise<Param[]> =>
+    ipcRenderer.invoke("model:extract-params", payload),
+  setParam: (payload: SetParamPayload): Promise<SetParamResult> =>
+    ipcRenderer.invoke("model:set-param", payload),
   previewMesh: (payload: PreviewMeshPayload): Promise<string> =>
     ipcRenderer.invoke("model:preview-mesh", payload),
   readModel: (payload: ReadModelPayload): Promise<string> =>

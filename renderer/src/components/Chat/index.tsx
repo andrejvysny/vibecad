@@ -2,14 +2,36 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   useAgentStore,
   type ChatMessage,
+  type ResultRef,
   type ToolCard,
 } from "../../stores/agent.store";
+import { useProjectStore } from "../../stores/project.store";
+import { useViewStore } from "../../stores/view.store";
 import { studioUrl } from "../../lib/studio";
+import { cn } from "../../lib/cn";
+import { Chip, IconButton } from "../ui";
 import type { Project } from "../../stores/project.store";
 
 interface Props {
   project: Project | null;
 }
+
+// Generic, model-agnostic follow-up prompts shown once a model exists.
+const QUICK_ACTIONS: ReadonlyArray<{ label: string; prompt: string }> = [
+  {
+    label: "Thicker walls",
+    prompt: "Increase the wall thickness of the current model.",
+  },
+  { label: "Add a lid", prompt: "Add a closed lid to the current model." },
+  {
+    label: "Round corners",
+    prompt: "Round/fillet the outer corners of the current model.",
+  },
+  {
+    label: "Mounting holes",
+    prompt: "Add mounting holes to the base of the current model.",
+  },
+];
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -18,10 +40,6 @@ function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-}
-
-function fileUrl(path: string): string {
-  return studioUrl(path);
 }
 
 export function Chat({ project }: Props) {
@@ -51,9 +69,9 @@ export function Chat({ project }: Props) {
     [project],
   );
 
-  function handleSend() {
-    if (!prompt.trim() || !project) return;
-    void run({ prompt: prompt.trim(), projectId: project.id, attachments });
+  function send(text: string) {
+    if (!text.trim() || !project) return;
+    void run({ prompt: text.trim(), projectId: project.id, attachments });
     setPrompt("");
     setAttachments([]);
   }
@@ -63,6 +81,8 @@ export function Chat({ project }: Props) {
     const paths = await window.api.pickImages({ projectId: project.id });
     setAttachments((a) => [...a, ...paths]);
   }
+
+  const hasModel = !!project?.activeModel;
 
   return (
     <div className="flex flex-col h-full">
@@ -99,12 +119,25 @@ export function Chat({ project }: Props) {
             Open or create a project to start
           </p>
         )}
+        {hasModel && !running && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {QUICK_ACTIONS.map((a) => (
+              <Chip
+                key={a.label}
+                onClick={() => send(a.prompt)}
+                title={a.prompt}
+              >
+                {a.label}
+              </Chip>
+            ))}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {attachments.map((path) => (
               <div key={path} className="relative">
                 <img
-                  src={fileUrl(path)}
+                  src={studioUrl(path)}
                   alt=""
                   className="w-12 h-12 object-cover rounded border border-white/10"
                 />
@@ -133,7 +166,7 @@ export function Chat({ project }: Props) {
               if (files.length) void addImageFiles(files);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend();
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(prompt);
             }}
           />
           <div className="flex flex-col gap-1">
@@ -146,21 +179,20 @@ export function Chat({ project }: Props) {
               </button>
             ) : (
               <button
-                onClick={handleSend}
+                onClick={() => send(prompt)}
                 disabled={!project || !prompt.trim()}
                 className="px-3 py-1 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded text-xs hover:bg-blue-500/30 disabled:opacity-40"
               >
                 Send
               </button>
             )}
-            <button
+            <IconButton
               onClick={() => void handlePick()}
               disabled={!project}
               title="Attach image"
-              className="px-3 py-1 border border-white/10 rounded text-xs text-gray-400 hover:border-white/30 disabled:opacity-40"
             >
-              📎
-            </button>
+              <PaperclipIcon />
+            </IconButton>
           </div>
         </div>
         <p className="text-xs text-gray-600 mt-1">
@@ -183,7 +215,7 @@ function MessageView({ message }: { message: ChatMessage }) {
             {message.attachments.map((p) => (
               <img
                 key={p}
-                src={fileUrl(p)}
+                src={studioUrl(p)}
                 alt=""
                 className="w-12 h-12 object-cover rounded border border-white/10"
               />
@@ -197,12 +229,18 @@ function MessageView({ message }: { message: ChatMessage }) {
   const isError = message.status === "error";
   return (
     <div className="space-y-1.5">
-      {message.tools.map((t) => (
-        <ToolCardView key={t.id} tool={t} />
-      ))}
+      {message.tools.length > 0 && (
+        <ToolStrip
+          tools={message.tools}
+          streaming={message.status === "streaming"}
+        />
+      )}
       {message.text && (
         <div
-          className={`whitespace-pre-wrap leading-relaxed ${isError ? "text-red-400" : "text-gray-200"}`}
+          className={cn(
+            "whitespace-pre-wrap leading-relaxed",
+            isError ? "text-red-400" : "text-gray-200",
+          )}
         >
           {message.text}
           {message.status === "streaming" && (
@@ -218,30 +256,192 @@ function MessageView({ message }: { message: ChatMessage }) {
             Thinking…
           </div>
         )}
+      {message.result && <ResultCard result={message.result} />}
     </div>
   );
 }
 
-function ToolCardView({ tool }: { tool: ToolCard }) {
-  const pending = tool.result === undefined;
-  const dot = tool.isError
-    ? "bg-red-400"
-    : pending
-      ? "bg-blue-400 animate-pulse"
-      : "bg-green-400";
-  const target =
-    tool.input && typeof tool.input === "object"
-      ? ((tool.input as Record<string, unknown>)["file_path"] ??
-        (tool.input as Record<string, unknown>)["path"] ??
-        (tool.input as Record<string, unknown>)["command"])
-      : undefined;
+// ── Tool strip ───────────────────────────────────────────────────────────────
+// Collapse an assistant turn's plumbing into one line; expand on demand.
+
+function ToolStrip({
+  tools,
+  streaming,
+}: {
+  tools: ToolCard[];
+  streaming: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const done = tools.filter((t) => t.result !== undefined).length;
+  // A non-zero exit that the agent kept going past is a recoverable probe,
+  // not a user-facing failure — count it but never paint it red.
+  const recovered = tools.filter((t) => t.isError).length;
+
   return (
-    <div className="flex items-center gap-2 text-xs text-gray-400">
-      <span className={`w-2 h-2 rounded-full ${dot}`} />
-      <span className="text-gray-300">{tool.name}</span>
-      {typeof target === "string" && (
-        <span className="text-gray-500 truncate max-w-[200px]">{target}</span>
+    <div className="rounded border border-white/5 bg-white/[0.02]">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 w-full px-2 py-1 text-xs text-gray-400 hover:text-gray-200"
+      >
+        <Chevron open={open} />
+        {streaming && done < tools.length ? (
+          <>
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+            <span>
+              Working…{" "}
+              <span className="text-gray-500">
+                ({done}/{tools.length})
+              </span>
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            <span>
+              {tools.length} step{tools.length === 1 ? "" : "s"}
+            </span>
+          </>
+        )}
+        {recovered > 0 && (
+          <span
+            className="text-amber-400/80"
+            title="recovered from non-zero exits"
+          >
+            · {recovered} retried
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="px-2 pb-1.5 space-y-0.5">
+          {tools.map((t) => (
+            <ToolRow key={t.id} tool={t} />
+          ))}
+        </div>
       )}
     </div>
+  );
+}
+
+function ToolRow({ tool }: { tool: ToolCard }) {
+  const pending = tool.result === undefined;
+  const dot = pending
+    ? "bg-blue-400 animate-pulse"
+    : tool.isError
+      ? "bg-amber-400"
+      : "bg-green-400";
+  const { label, full } = describeTool(tool);
+  return (
+    <div className="flex items-center gap-2 text-xs text-gray-400" title={full}>
+      <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", dot)} />
+      <span className="text-gray-300 w-10 shrink-0">{tool.name}</span>
+      <span className="text-gray-500 truncate">{label}</span>
+    </div>
+  );
+}
+
+// Pull a readable, basename-preserving label out of a tool's input.
+function describeTool(tool: ToolCard): { label: string; full: string } {
+  const input = tool.input;
+  if (input && typeof input === "object") {
+    const rec = input as Record<string, unknown>;
+    const path = rec["file_path"] ?? rec["path"];
+    if (typeof path === "string") {
+      const base = path.slice(path.lastIndexOf("/") + 1);
+      return { label: base, full: path };
+    }
+    const cmd = rec["command"];
+    if (typeof cmd === "string") return { label: cmd, full: cmd };
+  }
+  return { label: "", full: "" };
+}
+
+// ── Inline result card ───────────────────────────────────────────────────────
+
+function ResultCard({ result }: { result: ResultRef }) {
+  const project = useProjectStore((s) => s.activeProject);
+  function view() {
+    if (!project) return;
+    useProjectStore.getState().setActiveModel(project.id, result.modelBase);
+    useViewStore.getState().show3d();
+  }
+  return (
+    <button
+      onClick={view}
+      className="group flex items-center gap-3 w-full mt-1 p-2 rounded-lg border border-white/10 bg-white/[0.02] hover:border-white/25 text-left"
+    >
+      {result.thumbPath ? (
+        <img
+          src={studioUrl(result.thumbPath)}
+          alt={result.modelBase}
+          className="w-14 h-14 rounded object-cover bg-[#0a0d12] shrink-0"
+        />
+      ) : (
+        <div className="w-14 h-14 rounded grid place-items-center bg-[#0a0d12] text-gray-600 shrink-0">
+          <CubeIcon />
+        </div>
+      )}
+      <div className="min-w-0">
+        <div className="text-sm text-gray-200 truncate">{result.modelBase}</div>
+        <div className="text-xs text-blue-400 group-hover:text-blue-300">
+          View in 3D →
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ── Icons ────────────────────────────────────────────────────────────────────
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      className={cn("transition-transform shrink-0", open && "rotate-90")}
+    >
+      <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <path
+        d="M21 11.5l-8.5 8.5a5 5 0 01-7-7l8.5-8.5a3.3 3.3 0 014.7 4.7L10 17.5a1.7 1.7 0 01-2.3-2.3L15 8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CubeIcon() {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+    >
+      <path
+        d="M21 7.5l-9-5-9 5m18 0l-9 5m9-5v9l-9 5m0-9l-9-5m9 5v9m-9-14v9l9 5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }

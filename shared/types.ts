@@ -58,11 +58,26 @@ export interface ValidationResult {
   errors: string[];
 }
 
+export type ParamType =
+  | "number"
+  | "integer"
+  | "boolean"
+  | "string"
+  | "array"
+  | "expression";
+
 export interface Param {
   name: string;
-  value: number;
-  unit?: string;
+  value: number | string | boolean;
   line: number;
+  type?: ParamType;
+  // Customizer constraints parsed from the trailing `// [..]` comment.
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  description?: string;
+  unit?: string;
 }
 
 export interface ModelingBackend {

@@ -1,51 +1,38 @@
-# TODO — Make OpenSCAD Studio Functional End-to-End
+# TODO — UX Redesign
 
-Plan: `~/.claude/plans/act-as-senior-software-lovely-graham.md`
+Plan: `~/.claude/plans/act-as-senior-ui-ux-indexed-chipmunk.md`
+(Prior "functional end-to-end" phase complete; history in git.)
 
-## Phase 0 — VCS + tests
+## Tier 3c — UI primitives (first; reused everywhere)
 
-- [x] git init + initial commit
-- [x] vitest setup (root) + `npm test`
-- [x] `pickBackend` shared util + test (used in NewProjectDialog)
-- [x] preview-derivation pure helper + test
-- [x] claude-code parseEvent test, openscad extractParams test
+- [x] cn() helper + ToolbarButton / IconButton / Chip / Segmented
 
-## Phase A — Migrations
+## Tier 1 — Trust & clarity (chat)
 
-- [x] `npm run db:generate` (0000_motionless_ironclad.sql)
-- [x] surface migration errors in db/index.ts (fail loud if folder missing)
-- [x] ship migrations in electron-builder extraResources
+- [x] 1a. Collapsible tool-call strip + readable rows (Chat/index.tsx)
+- [x] 1a. Reclassify errors: red only on terminal failure, amber for recovered probes
+- [x] 1b. Inline render result card ("View in 3D") — agent.store.ts + Chat
+- [x] 1c. Composer quick-action chips
+- [x] 1d. Contrast + composer icon polish
 
-## Phase B — Project lifecycle
+## Tier 2 — CAD loop
 
-- [x] paths.ts (fixed buggy skills path) + projects.ts (create/list/get, skills copy, availability check)
-- [x] project:create/list/open IPC
-- [x] shared/ipc.ts payload types
-- [x] preload + ambient window.api type
-- [x] project.store loadProjects/createProject
-- [x] App.tsx nav + mount NewProjectDialog + Settings
+- [x] 2a. IPC: model:extract-params + model:set-param (shared/ipc, main, preload, d.ts)
+- [x] 2a. ParamPanel.tsx overlay (both engines, debounced on release, validate guard)
+- [x] 2b. viewer.getBounds() + dimension overlay + grid contrast/labels
+- [x] 2c. Orientation triad
+- [x] 2d. Busy overlay (rendering || agent running)
+- [x] 2e. Toolbar regroup + Export ▾ menu + success toast
 
-## Phase C — Watching + previews
+## Tier 3 — Structure
 
-- [x] setActiveWatch on create/open; removed watchWorkspace no-op
-- [x] setFiles derives previews (latest model_NNN)
-- [x] model:render IPC emits preview:updated + Re-render button
-
-## Phase D — Stop
-
-- [x] registerActive(projectId, child) in agent:run
+- [x] 3a. react-resizable-panels: resizable + collapsible panels, persist sizes
+- [x] 3b. WorkspaceTree grouped by model base (no version timeline)
 
 ## Verify
 
-- [x] typecheck green (electron + renderer)
-- [x] test green (11/11)
-- [x] electron tsup + renderer vite builds clean
-- [x] migration creates all 5 tables (verified against better-sqlite3)
-- [ ] manual end-to-end run (needs display + claude/openscad on PATH)
-
-## Follow-ups (out of scope this round)
-
-- Parameter panel (P2) — consumes model:render + extractParams
-- Session/message/model persistence + Claude --resume
-- Bonus fix landed: corrected getSkillsDir/getHarnessPath (were resolving
-  outside the repo — latent bugs, never exercised before)
+- [x] npm run typecheck clean (electron + renderer)
+- [x] renderer vite build + electron tsup build clean
+- [x] npm test: +3 new passing, 0 regressions (3 PRE-EXISTING failures in
+      preview.test.ts — stale `deriveLatestPreviews`, unrelated to this work)
+- [ ] npm run dev:desktop manual pass (see plan §Verification) — needs display

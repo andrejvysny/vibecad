@@ -1,4 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+  type ImperativePanelHandle,
+} from "react-resizable-panels";
 import { useProjectStore } from "./stores/project.store";
 import { useBackendStore } from "./stores/backend.store";
 import { useAgentStore } from "./stores/agent.store";
@@ -9,6 +15,7 @@ import { SourceViewer } from "./components/SourceViewer";
 import { Chat } from "./components/Chat";
 import { Settings } from "./components/Settings";
 import { NewProjectDialog } from "./components/NewProjectDialog";
+import { IconButton } from "./components/ui";
 import { studioUrl } from "./lib/studio";
 import type { Project } from "./stores/project.store";
 
@@ -22,6 +29,17 @@ export function App() {
   const [view, setView] = useState<"workspace" | "settings">("workspace");
   const [showNewProject, setShowNewProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const treePanel = useRef<ImperativePanelHandle>(null);
+  const chatPanel = useRef<ImperativePanelHandle>(null);
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+
+  const toggle = (ref: React.RefObject<ImperativePanelHandle | null>) => {
+    const p = ref.current;
+    if (!p) return;
+    p.isCollapsed() ? p.expand() : p.collapse();
+  };
 
   useEffect(() => {
     void initAgents();
@@ -37,6 +55,8 @@ export function App() {
     const unsubWorkspace = window.api.onWorkspaceChanged(
       ({ projectId, files }) => {
         useProjectStore.getState().setFiles(projectId, files);
+        // New render artifacts may complete a just-finished assistant turn.
+        useAgentStore.getState().refreshLastResult();
       },
     );
     const unsubMesh = window.api.onPreviewMeshReady(() => {
@@ -65,12 +85,26 @@ export function App() {
         </span>
         <div className="flex-1" />
         <div
-          className="flex items-center gap-2"
+          className="flex items-center gap-1"
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
+          <IconButton
+            onClick={() => toggle(treePanel)}
+            title="Toggle file panel"
+            className={treeCollapsed ? "text-gray-600" : ""}
+          >
+            <PanelLeftIcon />
+          </IconButton>
+          <IconButton
+            onClick={() => toggle(chatPanel)}
+            title="Toggle chat panel"
+            className={chatCollapsed ? "text-gray-600" : ""}
+          >
+            <PanelRightIcon />
+          </IconButton>
           <button
             onClick={() => setShowNewProject(true)}
-            className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-300 hover:border-white/30"
+            className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-300 hover:border-white/30 ml-1"
           >
             ＋ New Project
           </button>
@@ -89,27 +123,59 @@ export function App() {
         </div>
       </div>
 
-      {/* Main 3-panel layout */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left: Workspace tree */}
-        <div className="w-56 shrink-0 border-r border-white/10 overflow-hidden flex flex-col">
+      {/* Main 3-panel layout (resizable + collapsible, persisted) */}
+      <PanelGroup
+        direction="horizontal"
+        autoSaveId="opencad-main-layout"
+        className="flex-1 overflow-hidden"
+      >
+        <Panel
+          ref={treePanel}
+          id="tree"
+          order={1}
+          defaultSize={16}
+          minSize={10}
+          collapsible
+          collapsedSize={0}
+          onCollapse={() => setTreeCollapsed(true)}
+          onExpand={() => setTreeCollapsed(false)}
+          className="flex flex-col overflow-hidden"
+        >
           <WorkspaceTree project={activeProject} />
-        </div>
+        </Panel>
 
-        {/* Center: Preview / Source / Image / Settings */}
-        <div className="flex-1 overflow-hidden flex flex-col border-r border-white/10">
+        <ResizeHandle />
+
+        <Panel
+          id="center"
+          order={2}
+          minSize={30}
+          className="flex flex-col overflow-hidden"
+        >
           {view === "settings" ? (
             <Settings />
           ) : (
             <CenterPane project={activeProject} />
           )}
-        </div>
+        </Panel>
 
-        {/* Right: Chat */}
-        <div className="w-96 shrink-0 overflow-hidden flex flex-col">
+        <ResizeHandle />
+
+        <Panel
+          ref={chatPanel}
+          id="chat"
+          order={3}
+          defaultSize={26}
+          minSize={16}
+          collapsible
+          collapsedSize={0}
+          onCollapse={() => setChatCollapsed(true)}
+          onExpand={() => setChatCollapsed(false)}
+          className="flex flex-col overflow-hidden"
+        >
           <Chat project={activeProject} />
-        </div>
-      </div>
+        </Panel>
+      </PanelGroup>
 
       {error && (
         <div
@@ -131,6 +197,47 @@ export function App() {
         />
       )}
     </div>
+  );
+}
+
+/** Draggable splitter between panels (a hairline with a wider hit area). */
+function ResizeHandle() {
+  return (
+    <PanelResizeHandle className="group relative w-px bg-white/10 outline-none">
+      <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-500/30 group-data-[resize-handle-state=drag]:bg-blue-500/50 transition-colors" />
+    </PanelResizeHandle>
+  );
+}
+
+function PanelLeftIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="9" y1="4" x2="9" y2="20" />
+    </svg>
+  );
+}
+
+function PanelRightIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="15" y1="4" x2="15" y2="20" />
+    </svg>
   );
 }
 

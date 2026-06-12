@@ -31,6 +31,16 @@ export type SaveAttachmentPayload = {
 };
 export type StopAgentPayload = { projectId: string };
 export type ExportModelPayload = { modelPath: string; format: ExportFormat };
+// Parameter panel: read the active model's customizable params, and patch one.
+export type ExtractParamsPayload = { projectId: string; modelPath?: string };
+export type SetParamPayload = {
+  projectId: string;
+  modelPath?: string;
+  name: string;
+  value: number | string | boolean;
+};
+// `ok:false` ⇒ the patch broke validate() and was reverted; `errors` say why.
+export type SetParamResult = { ok: boolean; errors: string[] };
 // Export the preview STL for a model (latest model if modelPath omitted).
 export type PreviewMeshPayload = { projectId: string; modelPath?: string };
 export type ReadModelPayload = { path: string };
