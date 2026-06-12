@@ -16,6 +16,11 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
   },
+  // The opencascade.js emscripten glue is multi-MB and references Node builtins
+  // behind env checks — keep esbuild's dep optimizer from pre-bundling it.
+  optimizeDeps: {
+    exclude: ["opencascade.js"],
+  },
   build: {
     outDir: "dist",
     target: "es2022",

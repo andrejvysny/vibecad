@@ -95,7 +95,7 @@ interface ElectronAPI {
   // Push events (return unsubscribe fn)
   onAgentEvent(cb: (event: AgentEvent) => void): () => void;
   onPreviewMeshReady(
-    cb: (p: { projectId: string; stlPath: string }) => void,
+    cb: (p: { projectId: string; meshPath: string }) => void,
   ): () => void;
   onPreviewError(
     cb: (p: { projectId: string; message: string }) => void,

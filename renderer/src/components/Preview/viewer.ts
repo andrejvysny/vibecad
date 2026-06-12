@@ -36,6 +36,20 @@ const DIRS: Record<CameraPreset, [number, number, number]> = {
   iso: [1, -1, 1],
 };
 
+/** Shift line-segment positions by -center (matches the mesh's baked offset). */
+function centerSegments(
+  src: Float32Array,
+  center: THREE.Vector3,
+): Float32Array {
+  const out = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i += 3) {
+    out[i] = src[i]! - center.x;
+    out[i + 1] = src[i + 1]! - center.y;
+    out[i + 2] = src[i + 2]! - center.z;
+  }
+  return out;
+}
+
 function rotateAbout(
   v: THREE.Vector3,
   center: THREE.Vector3,
@@ -63,6 +77,9 @@ export class Viewer {
 
   private mesh: THREE.Mesh | null = null;
   private edges: THREE.LineSegments | null = null;
+  // True B-rep edge segments (already centered), when supplied by a STEP load;
+  // null ⇒ infer edges from the mesh via EdgesGeometry.
+  private customEdges: Float32Array | null = null;
   private grid: THREE.GridHelper | null = null;
   private readonly groundGroup = new THREE.Group();
   private shadowPlane!: THREE.Mesh;
@@ -374,7 +391,10 @@ export class Viewer {
 
   setGeometry(
     geometry: THREE.BufferGeometry,
-    { resetCamera = true }: { resetCamera?: boolean } = {},
+    {
+      resetCamera = true,
+      edges,
+    }: { resetCamera?: boolean; edges?: Float32Array | null } = {},
   ): void {
     this.clear();
     const shaded = toCreasedNormals(geometry, CREASE_ANGLE);
@@ -386,6 +406,8 @@ export class Viewer {
     const position = shaded.getAttribute("position");
     this.triangleCount = position ? Math.floor(position.count / 3) : 0;
     this.bounds = { x: size.x, y: size.y, z: size.z };
+    // Center supplied edges by the same offset baked into the mesh geometry.
+    this.customEdges = edges ? centerSegments(edges, center) : null;
     shaded.translate(-center.x, -center.y, -center.z);
     shaded.computeBoundingSphere();
     this.radius = Math.max(
@@ -416,8 +438,22 @@ export class Viewer {
       this.mesh.remove(this.edges);
       disposeObject(this.edges);
     }
+    // Prefer true B-rep edges (STEP); otherwise infer from the mesh geometry.
+    let edgeGeometry: THREE.BufferGeometry;
+    if (this.customEdges) {
+      edgeGeometry = new THREE.BufferGeometry();
+      edgeGeometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(this.customEdges, 3),
+      );
+    } else {
+      edgeGeometry = new THREE.EdgesGeometry(
+        this.mesh.geometry,
+        this.budget.edgeThreshold,
+      );
+    }
     this.edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(this.mesh.geometry, this.budget.edgeThreshold),
+      edgeGeometry,
       new THREE.LineBasicMaterial({
         color: edgeColor(this.settings.materialPreset),
         transparent: true,
@@ -558,6 +594,7 @@ export class Viewer {
     disposeObject(this.mesh);
     this.mesh = null;
     this.edges = null;
+    this.customEdges = null;
     this.triangleCount = 0;
     this.applyRenderBudget();
   }

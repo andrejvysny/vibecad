@@ -425,8 +425,9 @@ async function latestModel(project: ProjectRow): Promise<string | null> {
 }
 
 /**
- * Export the preview mesh (STL) for a model and notify the renderer. STL export
- * is headless (CGAL/CPU, no GL) so it never triggers the GUI-render crash.
+ * Export the preview mesh for a model and notify the renderer. build123d renders
+ * the precise STEP directly (and also writes an STL as the always-present print
+ * mesh); OpenSCAD uses STL. All exports are headless (no GL → no render crash).
  */
 async function exportPreviewMesh(
   projectId: string,
@@ -443,9 +444,15 @@ async function exportPreviewMesh(
       `${backend.name} not available${status.missing ? ` (missing: ${status.missing.join(", ")})` : ""}`,
     );
   }
-  const stlPath = await backend.export(modelPath, "stl");
-  mainWindow?.webContents.send("preview:mesh-ready", { projectId, stlPath });
-  return stlPath;
+  let meshPath: string;
+  if (backend.id === "build123d") {
+    meshPath = await backend.export(modelPath, "step");
+    await backend.export(modelPath, "stl"); // print-ready mesh, always present
+  } else {
+    meshPath = await backend.export(modelPath, "stl");
+  }
+  mainWindow?.webContents.send("preview:mesh-ready", { projectId, meshPath });
+  return meshPath;
 }
 
 /** Find the newest model in a project and export its preview mesh. */

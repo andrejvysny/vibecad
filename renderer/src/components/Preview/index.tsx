@@ -44,15 +44,17 @@ function fmt(n: number): string {
 }
 
 type MeshFormat = "stl" | "step";
-// Pick the displayable mesh for the active model: STL first (fast, the
-// re-render default), STEP as fallback for models that only have a B-rep
-// (e.g. imported files).
+// Pick the displayable mesh for the active model. build123d projects prefer the
+// precise STEP (rendered directly via OCCT); OpenSCAD prefers STL. Either falls
+// back to the other format when only one is present (e.g. imported files).
 function resolveMesh(
   project: Project | null,
 ): { path: string; format: MeshFormat } | null {
   if (!project?.activeModel) return null;
   const base = project.activeModel;
-  for (const format of ["stl", "step"] as const) {
+  const order: readonly MeshFormat[] =
+    project.modelingBackend === "build123d" ? ["step", "stl"] : ["stl", "step"];
+  for (const format of order) {
     if (project.files.includes(`${base}.${format}`)) {
       return { path: `${project.dir}/${base}.${format}`, format };
     }
@@ -132,7 +134,7 @@ export function Preview({ project }: Props) {
   }, [quality, controlPreset, projection, materialPreset, aoEnabled]);
 
   // Load the active model's mesh whenever it changes (or is re-exported).
-  // STL parses synchronously; STEP is tessellated via the occt-import-js WASM.
+  // STL parses synchronously; STEP is tessellated via the OpenCascade WASM kernel.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
@@ -156,11 +158,13 @@ export function Preview({ project }: Props) {
         return r.arrayBuffer();
       })
       .then((buf) =>
-        isStep ? loadStepGeometry(buf) : new STLLoader().parse(buf),
+        isStep
+          ? loadStepGeometry(buf)
+          : { geometry: new STLLoader().parse(buf), edges: null },
       )
-      .then((geometry) => {
+      .then(({ geometry, edges }) => {
         if (cancelled) return;
-        viewer.setGeometry(geometry, { resetCamera });
+        viewer.setGeometry(geometry, { resetCamera, edges });
         loadedPathRef.current = meshPath;
         setEmpty(false);
         setDims(viewer.getBounds());

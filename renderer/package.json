@@ -10,7 +10,6 @@
     "typecheck": "npx tsc --noEmit"
   },
   "dependencies": {
-    "occt-import-js": "^0.0.23",
     "opencascade.js": "^2.0.0-beta.b5ff984",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

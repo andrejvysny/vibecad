@@ -76,7 +76,9 @@ export type SetProjectModelPayload = { id: string; model: string };
 export type DeleteProjectPayload = { id: string };
 
 // Main → Renderer (webContents.send / ipcRenderer.on)
-export type PreviewMeshReadyPayload = { projectId: string; stlPath: string };
+// `meshPath` is the artifact the viewer should render (`.step` for build123d,
+// `.stl` for openscad).
+export type PreviewMeshReadyPayload = { projectId: string; meshPath: string };
 export type PreviewUpdatedPayload = {
   projectId: string;
   angle: CameraPreset;
