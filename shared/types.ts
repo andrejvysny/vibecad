@@ -8,7 +8,12 @@ export type AgentId = "claude-code" | "opencode" | "codex";
 export interface SpawnOpts {
   prompt: string;
   workingDir: string;
-  skillsDir: string;
+  // Extra dirs the agent is granted read access to (e.g. the bundled skill dir,
+  // which lives outside the project cwd). Empty for agents that can't add dirs.
+  contextDirs: string[];
+  // Assembled project context (instructions + skills + references + attachments).
+  // Injected as a system prompt where supported, else prepended to the prompt.
+  systemPreamble: string;
   sessionId?: string;
   env?: Record<string, string>;
   // CLI model override, passed verbatim to the agent's `--model` flag. Empty/
@@ -123,6 +128,33 @@ export interface ModelingBackend {
   validate(modelPath: string): Promise<ValidationResult>;
   extractParams(source: string): Promise<Param[]>;
 }
+
+// A saved, re-runnable recipe: an ordered list of prompts the agent executes as
+// sequential turns. Stored as <project>/.studio/workflows/<slug>.json.
+export interface WorkflowStep {
+  title: string;
+  prompt: string;
+  // Default true. When false, the run pauses AFTER this step until the user
+  // resumes (renderer re-invokes workflow:run with the next step index).
+  autoAdvance?: boolean;
+}
+
+export interface Workflow {
+  // Filename stem; assigned by main on save (derived from name when absent).
+  slug: string;
+  name: string;
+  description?: string;
+  // "planned" is reserved for future agent-decomposed workflows.
+  kind: "recipe" | "planned";
+  steps: WorkflowStep[];
+}
+
+export type WorkflowRunStatus =
+  | "running"
+  | "done"
+  | "paused"
+  | "finished"
+  | "error";
 
 export interface DetectedAgent {
   id: AgentId;

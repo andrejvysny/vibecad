@@ -13,6 +13,19 @@ import type {
   ImportStepPayload,
   CreateProjectPayload,
   GetProjectPayload,
+  ReadInstructionsPayload,
+  WriteInstructionsPayload,
+  ListSkillsPayload,
+  ImportSkillPayload,
+  RemoveSkillPayload,
+  ListReferencesPayload,
+  AddReferencePayload,
+  RemoveReferencePayload,
+  ListWorkflowsPayload,
+  SaveWorkflowPayload,
+  DeleteWorkflowPayload,
+  RunWorkflowPayload,
+  WorkflowStepPayload,
   DeleteProjectPayload,
   RenameProjectPayload,
   SetProjectAgentPayload,
@@ -32,6 +45,7 @@ import type {
   DetectedAgent,
   DetectedBackend,
   Param,
+  Workflow,
 } from "../../../shared/types.js";
 
 function on<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -83,6 +97,32 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("project:open", payload),
   renameProject: (payload: RenameProjectPayload): Promise<ProjectRecord> =>
     ipcRenderer.invoke("project:rename", payload),
+  readInstructions: (payload: ReadInstructionsPayload): Promise<string> =>
+    ipcRenderer.invoke("project:read-instructions", payload),
+  writeInstructions: (payload: WriteInstructionsPayload): Promise<void> =>
+    ipcRenderer.invoke("project:write-instructions", payload),
+  listSkills: (payload: ListSkillsPayload): Promise<string[]> =>
+    ipcRenderer.invoke("project:list-skills", payload),
+  importSkill: (payload: ImportSkillPayload): Promise<string[]> =>
+    ipcRenderer.invoke("project:import-skill", payload),
+  removeSkill: (payload: RemoveSkillPayload): Promise<string[]> =>
+    ipcRenderer.invoke("project:remove-skill", payload),
+  listReferences: (payload: ListReferencesPayload): Promise<string[]> =>
+    ipcRenderer.invoke("project:list-references", payload),
+  addReference: (payload: AddReferencePayload): Promise<string[]> =>
+    ipcRenderer.invoke("project:add-reference", payload),
+  removeReference: (payload: RemoveReferencePayload): Promise<string[]> =>
+    ipcRenderer.invoke("project:remove-reference", payload),
+
+  // Workflows
+  listWorkflows: (payload: ListWorkflowsPayload): Promise<Workflow[]> =>
+    ipcRenderer.invoke("workflow:list", payload),
+  saveWorkflow: (payload: SaveWorkflowPayload): Promise<Workflow[]> =>
+    ipcRenderer.invoke("workflow:save", payload),
+  deleteWorkflow: (payload: DeleteWorkflowPayload): Promise<Workflow[]> =>
+    ipcRenderer.invoke("workflow:delete", payload),
+  runWorkflow: (payload: RunWorkflowPayload): Promise<void> =>
+    ipcRenderer.invoke("workflow:run", payload),
   setProjectAgent: (payload: SetProjectAgentPayload): Promise<ProjectRecord> =>
     ipcRenderer.invoke("project:set-agent", payload),
   setProjectModel: (payload: SetProjectModelPayload): Promise<ProjectRecord> =>
@@ -101,6 +141,8 @@ contextBridge.exposeInMainWorld("api", {
     on<PreviewMeshReadyPayload>("preview:mesh-ready", cb),
   onWorkspaceChanged: (cb: (payload: WorkspaceChangedPayload) => void) =>
     on<WorkspaceChangedPayload>("workspace:changed", cb),
+  onWorkflowStep: (cb: (payload: WorkflowStepPayload) => void) =>
+    on<WorkflowStepPayload>("workflow:step", cb),
 
   // App
   getVersions: (): Promise<Record<string, string>> =>

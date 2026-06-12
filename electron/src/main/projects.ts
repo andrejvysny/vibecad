@@ -1,13 +1,30 @@
 import { randomUUID } from "node:crypto";
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import { initDb } from "./db/index.js";
 import { exports, messages, models, projects, sessions } from "./db/schema.js";
 import { detectBackends } from "./modeling/index.js";
-import { getSkillsDir } from "./paths.js";
 import type { AgentId, BackendId } from "../../../shared/types.js";
+
+/** Seed comment for a new project's instructions file (steers every agent turn). */
+const INSTRUCTIONS_TEMPLATE = `# Project Instructions
+
+<!-- Guidance for the agent on this project. Applied to every turn across all
+     agents. Examples: target printer/material, default wall thickness, units,
+     naming conventions, things to always/never do. Delete this comment when you
+     add your own. -->
+`;
 
 export interface CreateProjectInput {
   name: string;
@@ -43,11 +60,14 @@ export async function createProject(
   const dir = join(getWorkspaceRoot(), id);
   mkdirSync(dir, { recursive: true });
 
-  // Copy the backend skill into the project (spec §11/§15.1). The agent is
-  // also pointed at the bundled skill dir directly via getSkillsDir().
-  const skillDest = join(dir, ".studio", "skills", input.modelingBackend);
-  mkdirSync(skillDest, { recursive: true });
-  cpSync(getSkillsDir(input.modelingBackend), skillDest, { recursive: true });
+  // Scaffold the project's .studio context dirs (user-authored instructions,
+  // custom skills, references, workflows). The bundled backend skill is NOT
+  // copied — it's injected per-turn from getSkillsDir() via buildAgentContext().
+  const studioDir = join(dir, ".studio");
+  mkdirSync(join(studioDir, "skills", "custom"), { recursive: true });
+  mkdirSync(join(studioDir, "references"), { recursive: true });
+  mkdirSync(join(studioDir, "workflows"), { recursive: true });
+  writeFileSync(join(studioDir, "instructions.md"), INSTRUCTIONS_TEMPLATE);
 
   const now = new Date();
   const row: ProjectRow = {
@@ -68,6 +88,115 @@ export async function createProject(
 
 export function listProjects(): ProjectRow[] {
   return initDb().select().from(projects).all();
+}
+
+/** Absolute path to a project's `.studio` context dir (created on demand). */
+export function getStudioDir(id: string): string {
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+  const studioDir = join(row.dir, ".studio");
+  mkdirSync(studioDir, { recursive: true });
+  return studioDir;
+}
+
+/** Read a project's custom instructions; "" when the file is absent (older
+ *  projects predate the scaffold). Injected per-turn by buildAgentContext(). */
+export function readInstructions(id: string): string {
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+  try {
+    return readFileSync(join(row.dir, ".studio", "instructions.md"), "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+export function writeInstructions(id: string, content: string): void {
+  writeFileSync(join(getStudioDir(id), "instructions.md"), content);
+}
+
+// ──── Custom skills + references (files under .studio, injected per-turn) ──────
+
+/** Strip path separators / unsafe chars so a name stays inside its parent dir. */
+function safeName(name: string): string {
+  return basename(name).replace(/[^\w.\-]/g, "_") || "item";
+}
+
+/** Append _2, _3… until the path is free, so imports never clobber. */
+function uniquePath(path: string): string {
+  if (!existsSync(path)) return path;
+  const dir = dirname(path);
+  const base = basename(path);
+  const dot = base.indexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  for (let i = 2; ; i++) {
+    const candidate = join(dir, `${stem}_${i}${ext}`);
+    if (!existsSync(candidate)) return candidate;
+  }
+}
+
+function listDirNames(dir: string, kind: "dir" | "file"): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => (kind === "dir" ? d.isDirectory() : d.isFile()))
+      .map((d) => d.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** rmSync only if `target` resolves inside `root` (defends against `..`/symlinks). */
+function removeWithin(root: string, target: string): void {
+  const r = resolve(root);
+  if (resolve(target).startsWith(r + sep)) {
+    rmSync(target, { recursive: true, force: true });
+  }
+}
+
+export function listSkills(id: string): string[] {
+  return listDirNames(join(getStudioDir(id), "skills", "custom"), "dir");
+}
+
+/** Import a custom skill from a directory (containing SKILL.md) or a SKILL.md
+ *  file. Returns the stored skill name. */
+export function importSkill(id: string, srcPath: string): string {
+  const root = join(getStudioDir(id), "skills", "custom");
+  mkdirSync(root, { recursive: true });
+  const isDir = statSync(srcPath).isDirectory();
+  const skillFile = isDir ? join(srcPath, "SKILL.md") : srcPath;
+  if (!existsSync(skillFile)) {
+    throw new Error("Selection has no SKILL.md");
+  }
+  const srcDir = isDir ? srcPath : dirname(srcPath);
+  const dest = uniquePath(join(root, safeName(basename(srcDir))));
+  mkdirSync(dest, { recursive: true });
+  if (isDir) cpSync(srcDir, dest, { recursive: true });
+  else cpSync(skillFile, join(dest, "SKILL.md"));
+  return basename(dest);
+}
+
+export function removeSkill(id: string, name: string): void {
+  const root = join(getStudioDir(id), "skills", "custom");
+  removeWithin(root, join(root, safeName(name)));
+}
+
+export function listReferences(id: string): string[] {
+  return listDirNames(join(getStudioDir(id), "references"), "file");
+}
+
+export function addReference(id: string, srcPath: string): string {
+  const root = join(getStudioDir(id), "references");
+  mkdirSync(root, { recursive: true });
+  const dest = uniquePath(join(root, safeName(basename(srcPath))));
+  cpSync(srcPath, dest);
+  return basename(dest);
+}
+
+export function removeReference(id: string, name: string): void {
+  const root = join(getStudioDir(id), "references");
+  removeWithin(root, join(root, safeName(name)));
 }
 
 export function getProject(id: string): ProjectRow | undefined {

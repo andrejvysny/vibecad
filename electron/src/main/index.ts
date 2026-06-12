@@ -30,14 +30,22 @@ import { resolveOpenscad } from "./modeling/resolve-openscad.js";
 import { initDb } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import {
+  addReference,
   createProject,
   deleteProject,
   getProject,
   getWorkspaceRoot,
+  importSkill,
   listProjects,
+  listReferences,
+  listSkills,
+  readInstructions,
+  removeReference,
+  removeSkill,
   renameProject,
   setProjectAgent,
   setProjectModel,
+  writeInstructions,
   type ProjectRow,
 } from "./projects.js";
 import {
@@ -48,6 +56,13 @@ import {
   setAgentSessionId,
 } from "./chat.js";
 import { getSkillsDir } from "./paths.js";
+import { buildAgentContext } from "./agent-context.js";
+import {
+  deleteWorkflow,
+  getWorkflow,
+  listWorkflows,
+  saveWorkflow,
+} from "./workflows.js";
 import { unwatchProject, watchProject } from "./workspace.js";
 import type {
   RunAgentPayload,
@@ -61,6 +76,19 @@ import type {
   ImportStepPayload,
   CreateProjectPayload,
   GetProjectPayload,
+  ReadInstructionsPayload,
+  WriteInstructionsPayload,
+  ListSkillsPayload,
+  ImportSkillPayload,
+  RemoveSkillPayload,
+  ListReferencesPayload,
+  AddReferencePayload,
+  RemoveReferencePayload,
+  ListWorkflowsPayload,
+  SaveWorkflowPayload,
+  DeleteWorkflowPayload,
+  RunWorkflowPayload,
+  WorkflowStepPayload,
   DeleteProjectPayload,
   RenameProjectPayload,
   SetProjectAgentPayload,
@@ -238,16 +266,16 @@ ipcMain.handle("agent:detect", async () => {
   return detectAgents();
 });
 
-/** Append image attachment paths to the prompt so the agent reads them. */
-function withAttachments(prompt: string, attachments?: string[]): string {
-  if (!attachments?.length) return prompt;
-  const list = attachments.map((p) => `- ${p}`).join("\n");
-  return `${prompt}\n\nAttached image(s) for reference (read them):\n${list}`;
-}
-
-ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
-  const { prompt, projectId, attachments } = payload;
-
+/**
+ * Run a single agent turn end-to-end: assemble context, spawn the adapter,
+ * stream events to the renderer, persist the turn, and auto-render the result.
+ * Shared by the `agent:run` IPC handler and the workflow runner (Phase 3).
+ */
+async function runAgentTurn(
+  projectId: string,
+  prompt: string,
+  attachments?: string[],
+): Promise<void> {
   // Fetch project to determine agent/backend + working dir
   const db = initDb();
   const [project] = db
@@ -263,8 +291,6 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
   );
   if (!adapter) throw new Error(`Agent not found: ${project.agentId}`);
 
-  const skillsDir = getSkillsDir(project.modelingBackend);
-
   // Expose the resolved OpenSCAD binary so the agent's headless validation
   // works even when OpenSCAD isn't on PATH (the skill reads $OPENSCAD_BIN).
   const env: Record<string, string> = {};
@@ -273,14 +299,21 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     if (osc) env["OPENSCAD_BIN"] = osc;
   }
 
+  // Assemble per-project context (instructions + skills + references + images).
+  const { preamble, contextDirs } = await buildAgentContext(project, {
+    bundledSkillDir: getSkillsDir(project.modelingBackend),
+    attachments,
+  });
+
   // Persist the user turn + resolve a resumable session.
   const session = getOrCreateSession(projectId, project.agentId);
   insertMessage(session.id, "user", prompt);
 
   const child = adapter.spawn({
-    prompt: withAttachments(prompt, attachments),
+    prompt,
     workingDir: project.dir,
-    skillsDir,
+    contextDirs,
+    systemPreamble: preamble,
     // Only resume when the stored session belongs to the current agent; a
     // switched-away resume id is foreign and must not be replayed.
     sessionId:
@@ -383,7 +416,62 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
       reject(err);
     });
   });
+}
+
+ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
+  await runAgentTurn(payload.projectId, payload.prompt, payload.attachments);
 });
+
+/**
+ * Execute a saved workflow's steps as sequential agent turns, starting at
+ * `fromStep`. Each step is a full `runAgentTurn` (so chat/preview update as
+ * usual). Run-state lives in the renderer; we just push `workflow:step` events.
+ * A step with `autoAdvance:false` pauses the run AFTER it — the renderer resumes
+ * by re-invoking with the next step index.
+ */
+async function runWorkflow(
+  projectId: string,
+  slug: string,
+  fromStep = 0,
+): Promise<void> {
+  const wf = getWorkflow(projectId, slug);
+  const total = wf.steps.length;
+  const send = (
+    index: number,
+    status: WorkflowStepPayload["status"],
+    extra: Partial<WorkflowStepPayload> = {},
+  ): void => {
+    mainWindow?.webContents.send("workflow:step", {
+      projectId,
+      slug,
+      index,
+      total,
+      title: wf.steps[index]?.title ?? "",
+      status,
+      ...extra,
+    } satisfies WorkflowStepPayload);
+  };
+
+  for (let i = Math.max(0, fromStep); i < total; i++) {
+    const step = wf.steps[i];
+    if (!step) break;
+    send(i, "running");
+    try {
+      await runAgentTurn(projectId, step.prompt);
+    } catch (err) {
+      send(i, "error", {
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    send(i, "done");
+    if (i < total - 1 && step.autoAdvance === false) {
+      send(i, "paused", { nextStep: i + 1 });
+      return;
+    }
+  }
+  send(Math.max(0, total - 1), "finished");
+}
 
 ipcMain.handle("agent:stop", (_e, payload: StopAgentPayload) => {
   killActive(payload.projectId);
@@ -659,6 +747,91 @@ ipcMain.handle("project:open", async (_e, payload: GetProjectPayload) => {
 
 ipcMain.handle("project:rename", (_e, payload: RenameProjectPayload) => {
   return toRecord(renameProject(payload.id, payload.name));
+});
+
+ipcMain.handle(
+  "project:read-instructions",
+  (_e, payload: ReadInstructionsPayload) => readInstructions(payload.projectId),
+);
+
+ipcMain.handle(
+  "project:write-instructions",
+  (_e, payload: WriteInstructionsPayload) => {
+    writeInstructions(payload.projectId, payload.content);
+  },
+);
+
+ipcMain.handle("project:list-skills", (_e, payload: ListSkillsPayload) =>
+  listSkills(payload.projectId),
+);
+
+ipcMain.handle(
+  "project:import-skill",
+  async (_e, payload: ImportSkillPayload) => {
+    if (mainWindow) {
+      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: "Import skill (folder with SKILL.md, or a SKILL.md file)",
+        properties: ["openFile", "openDirectory"],
+        filters: [{ name: "Skill", extensions: ["md"] }],
+      });
+      if (!canceled)
+        for (const src of filePaths) importSkill(payload.projectId, src);
+    }
+    return listSkills(payload.projectId);
+  },
+);
+
+ipcMain.handle("project:remove-skill", (_e, payload: RemoveSkillPayload) => {
+  removeSkill(payload.projectId, payload.name);
+  return listSkills(payload.projectId);
+});
+
+ipcMain.handle(
+  "project:list-references",
+  (_e, payload: ListReferencesPayload) => listReferences(payload.projectId),
+);
+
+ipcMain.handle(
+  "project:add-reference",
+  async (_e, payload: AddReferencePayload) => {
+    if (mainWindow) {
+      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: "Add reference file(s)",
+        properties: ["openFile", "multiSelections"],
+      });
+      if (!canceled)
+        for (const src of filePaths) addReference(payload.projectId, src);
+    }
+    return listReferences(payload.projectId);
+  },
+);
+
+ipcMain.handle(
+  "project:remove-reference",
+  (_e, payload: RemoveReferencePayload) => {
+    removeReference(payload.projectId, payload.name);
+    return listReferences(payload.projectId);
+  },
+);
+
+// ──── IPC: workflows ─────────────────────────────────────────────────────────
+
+ipcMain.handle("workflow:list", (_e, payload: ListWorkflowsPayload) =>
+  listWorkflows(payload.projectId),
+);
+
+ipcMain.handle("workflow:save", (_e, payload: SaveWorkflowPayload) => {
+  saveWorkflow(payload.projectId, payload.workflow);
+  return listWorkflows(payload.projectId);
+});
+
+ipcMain.handle("workflow:delete", (_e, payload: DeleteWorkflowPayload) => {
+  deleteWorkflow(payload.projectId, payload.slug);
+  return listWorkflows(payload.projectId);
+});
+
+ipcMain.handle("workflow:run", async (_e, payload: RunWorkflowPayload) => {
+  await runWorkflow(payload.projectId, payload.slug, payload.fromStep ?? 0);
 });
 
 ipcMain.handle("project:set-agent", (_e, payload: SetProjectAgentPayload) => {

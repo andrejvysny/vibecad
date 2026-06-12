@@ -27,10 +27,16 @@ export const codexAdapter: AgentAdapter = {
   detect: () => which("codex"),
 
   spawn(opts: SpawnOpts) {
-    // Codex has no structured output — plain text stream
+    // Codex has no structured output — plain text stream. It also can't add
+    // context dirs, so the assembled preamble is inlined ahead of the prompt.
+    const preamble = opts.systemPreamble.trim();
+    const fullPrompt = preamble
+      ? `${opts.systemPreamble}\n\n---\n\n${opts.prompt}`
+      : opts.prompt;
+
     const args = ["--approval-mode", "auto-edit", "--quiet"];
     if (opts.model) args.push("--model", opts.model);
-    args.push(opts.prompt); // positional prompt must come last
+    args.push(fullPrompt); // positional prompt must come last
     const child = spawn("codex", args, {
       cwd: opts.workingDir,
       env: cleanSpawnEnv(opts.env),

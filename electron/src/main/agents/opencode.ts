@@ -27,12 +27,16 @@ export const openCodeAdapter: AgentAdapter = {
   detect: () => which("opencode"),
 
   spawn(opts: SpawnOpts) {
-    // Skill content is prepended to the prompt as system context
-    const promptWithSkill = opts.prompt;
+    // OpenCode can't add context dirs, so the assembled preamble (instructions +
+    // skills + references) is prepended to the positional prompt as context.
+    const preamble = opts.systemPreamble.trim();
+    const fullPrompt = preamble
+      ? `${opts.systemPreamble}\n\n---\n\n${opts.prompt}`
+      : opts.prompt;
 
     const args = ["run", "--format", "json", "--agent", "build"];
     if (opts.model) args.push("--model", opts.model); // expects provider/model
-    args.push(promptWithSkill);
+    args.push(fullPrompt);
     const child = spawn("opencode", args, {
       cwd: opts.workingDir,
       env: cleanSpawnEnv(opts.env),

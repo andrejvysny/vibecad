@@ -31,13 +31,30 @@ async function which(bin: string): Promise<string | null> {
   }
 }
 
+// Older Claude Code lacks --append-system-prompt; probed once at detect() so
+// spawn() (sync) can choose between system-prompt injection and stdin-prepend.
+let appendSystemPromptSupported = true;
+async function probeAppendSystemPrompt(bin: string): Promise<void> {
+  try {
+    const { stdout } = await execFileAsync(bin, ["--help"]);
+    appendSystemPromptSupported = stdout.includes("--append-system-prompt");
+  } catch {
+    /* keep optimistic default; spawn falls back if the flag is rejected */
+  }
+}
+
 export const claudeCodeAdapter: AgentAdapter = {
   id: "claude-code",
   name: "Claude Code",
 
-  detect: () => which("claude"),
+  async detect() {
+    const path = await which("claude");
+    if (path) await probeAppendSystemPrompt(path);
+    return path;
+  },
 
   spawn(opts: SpawnOpts) {
+    const preamble = opts.systemPreamble.trim();
     const args = [
       "--print",
       "--output-format",
@@ -51,9 +68,11 @@ export const claudeCodeAdapter: AgentAdapter = {
       "--strict-mcp-config",
       "--allowedTools",
       "Bash,Read,Write,Edit",
-      "--add-dir",
-      opts.skillsDir,
     ];
+    for (const dir of opts.contextDirs) args.push("--add-dir", dir);
+    if (preamble && appendSystemPromptSupported) {
+      args.push("--append-system-prompt", opts.systemPreamble);
+    }
     if (opts.model) args.push("--model", opts.model);
     if (opts.sessionId) args.push("--resume", opts.sessionId);
 
@@ -62,7 +81,13 @@ export const claudeCodeAdapter: AgentAdapter = {
       env: cleanSpawnEnv(opts.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
-    child.stdin?.write(opts.prompt);
+    // Fallback path: fold the preamble into the prompt when the system-prompt
+    // flag isn't available on this Claude Code build.
+    const stdinPrompt =
+      preamble && !appendSystemPromptSupported
+        ? `${opts.systemPreamble}\n\n---\n\n${opts.prompt}`
+        : opts.prompt;
+    child.stdin?.write(stdinPrompt);
     child.stdin?.end();
     return child;
   },

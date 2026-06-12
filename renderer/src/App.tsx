@@ -9,11 +9,13 @@ import { useProjectStore } from "./stores/project.store";
 import { useBackendStore } from "./stores/backend.store";
 import { useAgentStore } from "./stores/agent.store";
 import { useViewStore } from "./stores/view.store";
+import { useWorkflowStore } from "./stores/workflow.store";
 import { WorkspaceTree } from "./components/WorkspaceTree";
 import { Preview } from "./components/Preview";
 import { SourceViewer } from "./components/SourceViewer";
 import { Chat } from "./components/Chat";
 import { Settings } from "./components/Settings";
+import { ProjectContext } from "./components/ProjectContext";
 import { NewProjectDialog } from "./components/NewProjectDialog";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { IconButton } from "./components/ui";
@@ -27,7 +29,9 @@ export function App() {
   const createProject = useProjectStore((s) => s.createProject);
   const activeProject = useProjectStore((s) => s.activeProject);
 
-  const [view, setView] = useState<"workspace" | "settings">("workspace");
+  const [view, setView] = useState<"workspace" | "settings" | "project">(
+    "workspace",
+  );
   const [showNewProject, setShowNewProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,11 +70,15 @@ export function App() {
     const unsubPreviewError = window.api.onPreviewError(({ message }) => {
       setError(`Preview render failed: ${message}`);
     });
+    const unsubWorkflow = window.api.onWorkflowStep((p) => {
+      useWorkflowStore.getState().onStep(p);
+    });
     return () => {
       unsubEvent();
       unsubWorkspace();
       unsubMesh();
       unsubPreviewError();
+      unsubWorkflow();
     };
   }, []);
 
@@ -111,6 +119,19 @@ export function App() {
             className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-300 hover:border-white/30 ml-1"
           >
             ＋ New Project
+          </button>
+          <button
+            onClick={() =>
+              setView((v) => (v === "project" ? "workspace" : "project"))
+            }
+            title="Project context (instructions, skills, references)"
+            className={`px-2 py-0.5 text-xs rounded ${
+              view === "project"
+                ? "bg-white/10 text-gray-100"
+                : "text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            ☰ Context
           </button>
           <button
             onClick={() =>
@@ -158,6 +179,8 @@ export function App() {
         >
           {view === "settings" ? (
             <Settings />
+          ) : view === "project" ? (
+            <ProjectContext project={activeProject} />
           ) : (
             <CenterPane project={activeProject} />
           )}

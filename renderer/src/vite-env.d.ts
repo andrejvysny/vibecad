@@ -8,7 +8,20 @@ import type {
   DetectedBackend,
   ExportFormat,
   Param,
+  Workflow,
+  WorkflowRunStatus,
 } from "@shared/types";
+
+interface WorkflowStepPayload {
+  projectId: string;
+  slug: string;
+  index: number;
+  total: number;
+  title: string;
+  status: WorkflowRunStatus;
+  nextStep?: number;
+  message?: string;
+}
 
 interface SetParamResult {
   ok: boolean;
@@ -83,6 +96,34 @@ interface ElectronAPI {
   listProjects(): Promise<ProjectRecord[]>;
   openProject(payload: { id: string }): Promise<ProjectRecord>;
   renameProject(payload: { id: string; name: string }): Promise<ProjectRecord>;
+  readInstructions(payload: { projectId: string }): Promise<string>;
+  writeInstructions(payload: {
+    projectId: string;
+    content: string;
+  }): Promise<void>;
+  listSkills(payload: { projectId: string }): Promise<string[]>;
+  importSkill(payload: { projectId: string }): Promise<string[]>;
+  removeSkill(payload: { projectId: string; name: string }): Promise<string[]>;
+  listReferences(payload: { projectId: string }): Promise<string[]>;
+  addReference(payload: { projectId: string }): Promise<string[]>;
+  removeReference(payload: {
+    projectId: string;
+    name: string;
+  }): Promise<string[]>;
+  listWorkflows(payload: { projectId: string }): Promise<Workflow[]>;
+  saveWorkflow(payload: {
+    projectId: string;
+    workflow: Workflow;
+  }): Promise<Workflow[]>;
+  deleteWorkflow(payload: {
+    projectId: string;
+    slug: string;
+  }): Promise<Workflow[]>;
+  runWorkflow(payload: {
+    projectId: string;
+    slug: string;
+    fromStep?: number;
+  }): Promise<void>;
   setProjectAgent(payload: {
     id: string;
     agentId: AgentId;
@@ -103,6 +144,7 @@ interface ElectronAPI {
   onWorkspaceChanged(
     cb: (p: { projectId: string; files: string[] }) => void,
   ): () => void;
+  onWorkflowStep(cb: (p: WorkflowStepPayload) => void): () => void;
   // App
   getVersions(): Promise<Record<string, string>>;
   setOverlayTheme(theme: { color: string; symbolColor: string }): Promise<void>;

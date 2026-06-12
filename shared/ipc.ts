@@ -6,6 +6,8 @@ import type {
   DetectedAgent,
   DetectedBackend,
   ExportFormat,
+  Workflow,
+  WorkflowRunStatus,
 } from "./types";
 
 // Renderer → Main (ipcRenderer.invoke / ipcMain.handle)
@@ -69,11 +71,32 @@ export type CreateProjectPayload = {
   outputNeed: "print" | "cad";
 };
 export type GetProjectPayload = { id: string };
+export type ReadInstructionsPayload = { projectId: string };
+export type WriteInstructionsPayload = { projectId: string; content: string };
+// Custom skills + references live as files under <project>/.studio. import/add
+// open a native picker in main and return the updated entry-name list.
+export type ListSkillsPayload = { projectId: string };
+export type ImportSkillPayload = { projectId: string };
+export type RemoveSkillPayload = { projectId: string; name: string };
+export type ListReferencesPayload = { projectId: string };
+export type AddReferencePayload = { projectId: string };
+export type RemoveReferencePayload = { projectId: string; name: string };
 export type RenameProjectPayload = { id: string; name: string };
 export type SetProjectAgentPayload = { id: string; agentId: AgentId };
 // `model` is the CLI model string ("" ⇒ clear back to the agent default).
 export type SetProjectModelPayload = { id: string; model: string };
 export type DeleteProjectPayload = { id: string };
+
+// Workflows (saved recipes under .studio/workflows). run() executes steps as
+// sequential agent turns; fromStep resumes a paused run.
+export type ListWorkflowsPayload = { projectId: string };
+export type SaveWorkflowPayload = { projectId: string; workflow: Workflow };
+export type DeleteWorkflowPayload = { projectId: string; slug: string };
+export type RunWorkflowPayload = {
+  projectId: string;
+  slug: string;
+  fromStep?: number;
+};
 
 // Main → Renderer (webContents.send / ipcRenderer.on)
 // `meshPath` is the artifact the viewer should render (`.step` for build123d,
@@ -86,6 +109,18 @@ export type PreviewUpdatedPayload = {
 };
 export type PreviewErrorPayload = { projectId: string; message: string };
 export type WorkspaceChangedPayload = { projectId: string; files: string[] };
+// Per-step progress for a running workflow. `index` is the step the event is
+// about; `nextStep` accompanies a "paused" status (where to resume).
+export type WorkflowStepPayload = {
+  projectId: string;
+  slug: string;
+  index: number;
+  total: number;
+  title: string;
+  status: WorkflowRunStatus;
+  nextStep?: number;
+  message?: string;
+};
 export type AgentsDetectedPayload = { agents: DetectedAgent[] };
 export type BackendsDetectedPayload = { backends: DetectedBackend[] };
 
