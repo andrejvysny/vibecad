@@ -28,6 +28,19 @@ export function getOrCreateSession(
   return row;
 }
 
+/**
+ * Rebind a project's session to a new agent, dropping any resume id (the old
+ * id belongs to the previous CLI and can't carry context across agents).
+ * No-op if the project has no session yet.
+ */
+export function resetSessionAgent(projectId: string, agentId: string): void {
+  initDb()
+    .update(sessions)
+    .set({ agentId, agentSessionId: null })
+    .where(eq(sessions.projectId, projectId))
+    .run();
+}
+
 export function setAgentSessionId(
   sessionId: string,
   agentSessionId: string,

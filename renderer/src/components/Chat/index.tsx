@@ -11,6 +11,7 @@ import { studioUrl } from "../../lib/studio";
 import { cn } from "../../lib/cn";
 import { Chip, IconButton } from "../ui";
 import type { Project } from "../../stores/project.store";
+import { AGENT_MODELS, type AgentId } from "@shared/types";
 
 interface Props {
   project: Project | null;
@@ -45,7 +46,7 @@ function fileToBase64(file: File): Promise<string> {
 export function Chat({ project }: Props) {
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
-  const { messages, running, run, stop } = useAgentStore();
+  const { messages, running, run, stop, detected } = useAgentStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -86,8 +87,18 @@ export function Chat({ project }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-3 py-2 border-b border-white/10 text-xs font-medium text-gray-400 uppercase tracking-wide">
-        Chat
+      <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">
+          Chat
+        </span>
+        <div className="flex items-center gap-1.5">
+          <AgentSwitcher
+            project={project}
+            detected={detected}
+            disabled={running}
+          />
+          <ModelSwitcher project={project} disabled={running} />
+        </div>
       </div>
 
       {/* Message stream */}
@@ -132,30 +143,40 @@ export function Chat({ project }: Props) {
             ))}
           </div>
         )}
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 mb-2">
-            {attachments.map((path) => (
-              <div key={path} className="relative">
-                <img
-                  src={studioUrl(path)}
-                  alt=""
-                  className="w-12 h-12 object-cover rounded border border-white/10"
-                />
-                <button
-                  onClick={() =>
-                    setAttachments((a) => a.filter((p) => p !== path))
-                  }
-                  className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-black/80 border border-white/20 text-[10px] leading-none text-gray-300 hover:text-white"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="flex gap-2">
+
+        {/* One enclosed input surface: attachments + textarea + action bar. */}
+        <div
+          className={cn(
+            "rounded-xl border bg-white/[0.03] transition-colors",
+            project
+              ? "border-white/10 focus-within:border-white/25 focus-within:bg-white/[0.05]"
+              : "border-white/5 opacity-60",
+          )}
+        >
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-2.5 pt-2.5">
+              {attachments.map((path) => (
+                <div key={path} className="relative">
+                  <img
+                    src={studioUrl(path)}
+                    alt=""
+                    className="w-12 h-12 object-cover rounded-md border border-white/10"
+                  />
+                  <button
+                    onClick={() =>
+                      setAttachments((a) => a.filter((p) => p !== path))
+                    }
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-black/80 border border-white/20 text-[10px] leading-none text-gray-300 hover:text-white"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <textarea
-            className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-sm resize-none text-gray-100 placeholder-gray-500 focus:outline-none focus:border-white/30"
+            className="w-full bg-transparent px-3 pt-2.5 pb-1 text-sm leading-relaxed resize-none text-gray-100 placeholder-gray-500 focus:outline-none disabled:cursor-not-allowed"
             rows={3}
             placeholder="Describe what to model…"
             value={prompt}
@@ -169,37 +190,114 @@ export function Chat({ project }: Props) {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(prompt);
             }}
           />
-          <div className="flex flex-col gap-1">
+
+          {/* Action bar: attach · hint · send/stop */}
+          <div className="flex items-center gap-2 px-2 pb-2">
+            <IconButton
+              onClick={() => void handlePick()}
+              disabled={!project}
+              title="Attach image"
+              className="shrink-0"
+            >
+              <PaperclipIcon />
+            </IconButton>
+            <span className="flex-1 min-w-0 truncate text-[11px] text-gray-600 select-none">
+              <kbd className="font-sans text-gray-500">⌘↵</kbd> to send · paste
+              or drop images
+            </span>
             {running ? (
               <button
                 onClick={() => project && void stop(project.id)}
-                className="px-3 py-1 bg-red-500/20 text-red-400 border border-red-500/30 rounded text-xs hover:bg-red-500/30"
+                className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/90 text-white text-xs font-medium hover:bg-red-500 transition-colors"
               >
+                <StopIcon />
                 Stop
               </button>
             ) : (
               <button
                 onClick={() => send(prompt)}
                 disabled={!project || !prompt.trim()}
-                className="px-3 py-1 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded text-xs hover:bg-blue-500/30 disabled:opacity-40"
+                className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-medium hover:bg-blue-400 disabled:bg-white/10 disabled:text-gray-500 transition-colors"
               >
                 Send
+                <SendIcon />
               </button>
             )}
-            <IconButton
-              onClick={() => void handlePick()}
-              disabled={!project}
-              title="Attach image"
-            >
-              <PaperclipIcon />
-            </IconButton>
           </div>
         </div>
-        <p className="text-xs text-gray-600 mt-1">
-          ⌘↵ to send · paste or drop images
-        </p>
       </div>
     </div>
+  );
+}
+
+// Per-project agent selector. Lists every detected agent; unavailable ones are
+// disabled with a hint. Switching persists to the project and resets the
+// agent's CLI session (handled main-side) — displayed history is kept.
+function AgentSwitcher({
+  project,
+  detected,
+  disabled,
+}: {
+  project: Project | null;
+  detected: ReadonlyArray<{ id: AgentId; name: string; available: boolean }>;
+  disabled: boolean;
+}) {
+  if (!project || detected.length === 0) return null;
+  return (
+    <select
+      value={project.agentId}
+      disabled={disabled}
+      title={
+        disabled ? "Stop the current run to switch agents" : "Agent backend"
+      }
+      onChange={(e) =>
+        void useProjectStore
+          .getState()
+          .setProjectAgent(project.id, e.target.value as AgentId)
+      }
+      className="bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-xs text-gray-200 focus:outline-none focus:border-white/30 disabled:opacity-40"
+    >
+      {detected.map((a) => (
+        <option key={a.id} value={a.id} disabled={!a.available}>
+          {a.name}
+          {a.available ? "" : " (not found)"}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// Per-project model selector for the bound agent. Presets come from
+// AGENT_MODELS; "Default" (empty value) clears the override so the CLI uses its
+// own configured model. Switching the agent resets this (handled in the store).
+function ModelSwitcher({
+  project,
+  disabled,
+}: {
+  project: Project | null;
+  disabled: boolean;
+}) {
+  if (!project) return null;
+  const models = AGENT_MODELS[project.agentId as AgentId];
+  if (!models) return null;
+  return (
+    <select
+      value={project.agentModel ?? ""}
+      disabled={disabled}
+      title={disabled ? "Stop the current run to switch model" : "Model"}
+      onChange={(e) =>
+        void useProjectStore
+          .getState()
+          .setProjectModel(project.id, e.target.value)
+      }
+      className="bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-xs text-gray-200 focus:outline-none focus:border-white/30 disabled:opacity-40"
+    >
+      {models.map((m) => (
+        <option key={m.value} value={m.value}>
+          {m.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -404,6 +502,33 @@ function Chevron({ open }: { open: boolean }) {
       className={cn("transition-transform shrink-0", open && "rotate-90")}
     >
       <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+    >
+      <path
+        d="M12 19V5m0 0l-6 6m6-6l6 6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="6" width="12" height="12" rx="2" />
     </svg>
   );
 }

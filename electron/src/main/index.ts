@@ -36,12 +36,15 @@ import {
   getWorkspaceRoot,
   listProjects,
   renameProject,
+  setProjectAgent,
+  setProjectModel,
   type ProjectRow,
 } from "./projects.js";
 import {
   getOrCreateSession,
   insertMessage,
   listMessages,
+  resetSessionAgent,
   setAgentSessionId,
 } from "./chat.js";
 import { getSkillsDir } from "./paths.js";
@@ -59,6 +62,8 @@ import type {
   GetProjectPayload,
   DeleteProjectPayload,
   RenameProjectPayload,
+  SetProjectAgentPayload,
+  SetProjectModelPayload,
   ProjectRecord,
   ChatHistoryPayload,
   PickImagesPayload,
@@ -104,6 +109,7 @@ function toRecord(row: ProjectRow): ProjectRecord {
     name: row.name,
     dir: row.dir,
     agentId: row.agentId as ProjectRecord["agentId"],
+    agentModel: row.agentModel,
     modelingBackend: row.modelingBackend,
     outputNeed: row.outputNeed,
     createdAt: row.createdAt.getTime(),
@@ -274,8 +280,14 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     prompt: withAttachments(prompt, attachments),
     workingDir: project.dir,
     skillsDir,
-    sessionId: session.agentSessionId ?? undefined,
+    // Only resume when the stored session belongs to the current agent; a
+    // switched-away resume id is foreign and must not be replayed.
+    sessionId:
+      session.agentId === project.agentId
+        ? (session.agentSessionId ?? undefined)
+        : undefined,
     env,
+    model: project.agentModel ?? undefined,
   });
   registerActive(projectId, adapter.id, child);
 
@@ -582,6 +594,17 @@ ipcMain.handle("project:open", async (_e, payload: GetProjectPayload) => {
 
 ipcMain.handle("project:rename", (_e, payload: RenameProjectPayload) => {
   return toRecord(renameProject(payload.id, payload.name));
+});
+
+ipcMain.handle("project:set-agent", (_e, payload: SetProjectAgentPayload) => {
+  const row = setProjectAgent(payload.id, payload.agentId);
+  // Drop the previous agent's resume id so the new agent starts a fresh session.
+  resetSessionAgent(payload.id, payload.agentId);
+  return toRecord(row);
+});
+
+ipcMain.handle("project:set-model", (_e, payload: SetProjectModelPayload) => {
+  return toRecord(setProjectModel(payload.id, payload.model));
 });
 
 ipcMain.handle("project:delete", (_e, payload: DeleteProjectPayload) => {

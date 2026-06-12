@@ -52,6 +52,8 @@ export type ProjectRecord = {
   name: string;
   dir: string;
   agentId: AgentId;
+  // Selected CLI model for the bound agent; null ⇒ the agent's own default.
+  agentModel: string | null;
   modelingBackend: BackendId;
   outputNeed: "print" | "cad";
   // Epoch ms — lets the renderer sort the switcher newest-first.
@@ -65,6 +67,9 @@ export type CreateProjectPayload = {
 };
 export type GetProjectPayload = { id: string };
 export type RenameProjectPayload = { id: string; name: string };
+export type SetProjectAgentPayload = { id: string; agentId: AgentId };
+// `model` is the CLI model string ("" ⇒ clear back to the agent default).
+export type SetProjectModelPayload = { id: string; model: string };
 export type DeleteProjectPayload = { id: string };
 
 // Main → Renderer (webContents.send / ipcRenderer.on)

@@ -11,6 +11,8 @@ export interface Project {
   name: string;
   dir: string;
   agentId: string;
+  // Selected CLI model for the bound agent; null ⇒ the agent's own default.
+  agentModel: string | null;
   modelingBackend: "openscad" | "build123d";
   outputNeed: "print" | "cad";
   createdAt: number;
@@ -38,6 +40,8 @@ interface ProjectStore {
     outputNeed: "print" | "cad";
   }): Promise<Project>;
   renameProject(id: string, name: string): Promise<void>;
+  setProjectAgent(id: string, agentId: AgentId): Promise<void>;
+  setProjectModel(id: string, model: string): Promise<void>;
   deleteProject(id: string): Promise<void>;
 }
 
@@ -128,6 +132,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     await window.api.renameProject({ id, name });
     set((s) => {
       const apply = (p: Project): Project => (p.id === id ? { ...p, name } : p);
+      return {
+        projects: s.projects.map(apply),
+        activeProject: s.activeProject ? apply(s.activeProject) : null,
+      };
+    });
+  },
+
+  async setProjectAgent(id, agentId) {
+    await window.api.setProjectAgent({ id, agentId });
+    // Keep displayed history; only the agent binding changes (session reset
+    // happens main-side). New prompts run on the newly-selected agent. The
+    // model is cleared too (main-side) since model strings are agent-specific.
+    set((s) => {
+      const apply = (p: Project): Project =>
+        p.id === id ? { ...p, agentId, agentModel: null } : p;
+      return {
+        projects: s.projects.map(apply),
+        activeProject: s.activeProject ? apply(s.activeProject) : null,
+      };
+    });
+  },
+
+  async setProjectModel(id, model) {
+    await window.api.setProjectModel({ id, model });
+    set((s) => {
+      const apply = (p: Project): Project =>
+        p.id === id ? { ...p, agentModel: model || null } : p;
       return {
         projects: s.projects.map(apply),
         activeProject: s.activeProject ? apply(s.activeProject) : null,

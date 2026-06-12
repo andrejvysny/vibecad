@@ -30,15 +30,14 @@ export const openCodeAdapter: AgentAdapter = {
     // Skill content is prepended to the prompt as system context
     const promptWithSkill = opts.prompt;
 
-    const child = spawn(
-      "opencode",
-      ["run", "--format", "json", "--agent", "build", promptWithSkill],
-      {
-        cwd: opts.workingDir,
-        env: cleanSpawnEnv(opts.env),
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    const args = ["run", "--format", "json", "--agent", "build"];
+    if (opts.model) args.push("--model", opts.model); // expects provider/model
+    args.push(promptWithSkill);
+    const child = spawn("opencode", args, {
+      cwd: opts.workingDir,
+      env: cleanSpawnEnv(opts.env),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     return child;
   },
 

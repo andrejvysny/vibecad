@@ -20,6 +20,7 @@ interface ProjectRecord {
   name: string;
   dir: string;
   agentId: AgentId;
+  agentModel: string | null;
   modelingBackend: BackendId;
   outputNeed: "print" | "cad";
   createdAt: number;
@@ -81,6 +82,14 @@ interface ElectronAPI {
   listProjects(): Promise<ProjectRecord[]>;
   openProject(payload: { id: string }): Promise<ProjectRecord>;
   renameProject(payload: { id: string; name: string }): Promise<ProjectRecord>;
+  setProjectAgent(payload: {
+    id: string;
+    agentId: AgentId;
+  }): Promise<ProjectRecord>;
+  setProjectModel(payload: {
+    id: string;
+    model: string;
+  }): Promise<ProjectRecord>;
   deleteProject(payload: { id: string }): Promise<{ id: string }>;
   // Push events (return unsubscribe fn)
   onAgentEvent(cb: (event: AgentEvent) => void): () => void;

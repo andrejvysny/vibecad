@@ -5,6 +5,8 @@ export const projects = sqliteTable("projects", {
   name: text("name").notNull(),
   dir: text("dir").notNull(),
   agentId: text("agent_id").notNull(),
+  // Selected CLI model for the bound agent; null ⇒ the agent's own default.
+  agentModel: text("agent_model"),
   modelingBackend: text("modeling_backend")
     .notNull()
     .$type<"openscad" | "build123d">(),

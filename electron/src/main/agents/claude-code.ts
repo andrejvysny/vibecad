@@ -49,6 +49,7 @@ export const claudeCodeAdapter: AgentAdapter = {
       "--add-dir",
       opts.skillsDir,
     ];
+    if (opts.model) args.push("--model", opts.model);
     if (opts.sessionId) args.push("--resume", opts.sessionId);
 
     const child = spawn("claude", args, {

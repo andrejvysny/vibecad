@@ -55,6 +55,7 @@ export async function createProject(
     name: input.name,
     dir,
     agentId: input.agentId,
+    agentModel: null,
     modelingBackend: input.modelingBackend,
     outputNeed: input.outputNeed,
     createdAt: now,
@@ -82,6 +83,32 @@ export function renameProject(id: string, name: string): ProjectRow {
   const db = initDb();
   db.update(projects)
     .set({ name, updatedAt: new Date() })
+    .where(eq(projects.id, id))
+    .run();
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+  return row;
+}
+
+/** Switch the agent backend bound to a project (spec: per-project, mutable).
+ *  Clears the model selection — model strings are agent-specific, so a value
+ *  picked for the old agent would be meaningless (or wrong) for the new one. */
+export function setProjectAgent(id: string, agentId: AgentId): ProjectRow {
+  const db = initDb();
+  db.update(projects)
+    .set({ agentId, agentModel: null, updatedAt: new Date() })
+    .where(eq(projects.id, id))
+    .run();
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+  return row;
+}
+
+/** Set (or clear, on empty string) the CLI model for a project's agent. */
+export function setProjectModel(id: string, model: string): ProjectRow {
+  const db = initDb();
+  db.update(projects)
+    .set({ agentModel: model || null, updatedAt: new Date() })
     .where(eq(projects.id, id))
     .run();
   const row = getProject(id);

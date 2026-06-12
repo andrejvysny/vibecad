@@ -11,7 +11,38 @@ export interface SpawnOpts {
   skillsDir: string;
   sessionId?: string;
   env?: Record<string, string>;
+  // CLI model override, passed verbatim to the agent's `--model` flag. Empty/
+  // undefined ⇒ no flag, i.e. the CLI's own configured default.
+  model?: string;
 }
+
+// Per-agent model presets surfaced in the model picker. The empty `value` is
+// "Default" → no `--model` flag. Values are passed verbatim to each CLI, so
+// they follow that CLI's own naming (aliases for claude, `provider/model` for
+// opencode). The user can always fall back to Default if their setup differs.
+export const AGENT_MODELS: Record<
+  AgentId,
+  ReadonlyArray<{ value: string; label: string }>
+> = {
+  "claude-code": [
+    { value: "", label: "Default" },
+    { value: "opus", label: "Opus" },
+    { value: "sonnet", label: "Sonnet" },
+    { value: "haiku", label: "Haiku" },
+  ],
+  codex: [
+    { value: "", label: "Default" },
+    { value: "gpt-5.5", label: "GPT-5.5" },
+    { value: "gpt-5", label: "GPT-5" },
+    { value: "o3", label: "o3" },
+  ],
+  opencode: [
+    { value: "", label: "Default" },
+    { value: "anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+    { value: "anthropic/claude-opus-4-1", label: "Claude Opus 4.1" },
+    { value: "openai/gpt-5", label: "GPT-5" },
+  ],
+};
 
 // Normalized event vocabulary the renderer understands, regardless of which
 // agent CLI produced it. Adapters translate native stream formats into these.

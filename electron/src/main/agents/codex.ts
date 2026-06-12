@@ -28,15 +28,14 @@ export const codexAdapter: AgentAdapter = {
 
   spawn(opts: SpawnOpts) {
     // Codex has no structured output — plain text stream
-    const child = spawn(
-      "codex",
-      ["--approval-mode", "auto-edit", "--quiet", opts.prompt],
-      {
-        cwd: opts.workingDir,
-        env: cleanSpawnEnv(opts.env),
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    const args = ["--approval-mode", "auto-edit", "--quiet"];
+    if (opts.model) args.push("--model", opts.model);
+    args.push(opts.prompt); // positional prompt must come last
+    const child = spawn("codex", args, {
+      cwd: opts.workingDir,
+      env: cleanSpawnEnv(opts.env),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     return child;
   },
 

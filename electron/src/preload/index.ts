@@ -14,6 +14,8 @@ import type {
   GetProjectPayload,
   DeleteProjectPayload,
   RenameProjectPayload,
+  SetProjectAgentPayload,
+  SetProjectModelPayload,
   ProjectRecord,
   PreviewUpdatedPayload,
   PreviewErrorPayload,
@@ -78,6 +80,10 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("project:open", payload),
   renameProject: (payload: RenameProjectPayload): Promise<ProjectRecord> =>
     ipcRenderer.invoke("project:rename", payload),
+  setProjectAgent: (payload: SetProjectAgentPayload): Promise<ProjectRecord> =>
+    ipcRenderer.invoke("project:set-agent", payload),
+  setProjectModel: (payload: SetProjectModelPayload): Promise<ProjectRecord> =>
+    ipcRenderer.invoke("project:set-model", payload),
   deleteProject: (payload: DeleteProjectPayload): Promise<{ id: string }> =>
     ipcRenderer.invoke("project:delete", payload),
 

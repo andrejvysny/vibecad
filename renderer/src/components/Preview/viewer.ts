@@ -5,6 +5,14 @@ import type { CameraPreset } from "@shared/types";
 
 const BG = 0x0a0d12;
 
+// Orbit speed for Shift + two-finger drag. ~0.4 → a full screen-height of
+// (trackpad-accelerated) travel sweeps roughly one full revolution. Tunable.
+const ORBIT_SENS = 0.4;
+
+// Orbit speed for left-button click-drag (raw pixel deltas). ~1.0 → dragging a
+// full screen-height sweeps one full revolution.
+const ORBIT_DRAG_SENS = 1.0;
+
 // Z-up camera directions per preset (OpenSCAD exports Z-up STL). Scaled to the
 // model's bounding sphere. `top` carries a tiny Y offset to dodge the up-vector
 // singularity when looking straight down +Z.
@@ -42,9 +50,8 @@ export class Viewer {
   private ro: ResizeObserver;
   private edgesVisible = true;
   private gridVisible = true;
-  private dragging = false;
-  private lastX = 0;
-  private lastY = 0;
+  // Active left-button drag gesture: orbit (plain) or pan (Shift held).
+  private drag: "orbit" | "pan" | null = null;
 
   // Model footprint (world units) + grid cell size, surfaced to the HUD overlay.
   private bounds = { x: 0, y: 0, z: 0 };
@@ -115,6 +122,7 @@ export class Viewer {
     el.addEventListener("pointermove", this.onPointerMove);
     el.addEventListener("pointerup", this.onPointerUp);
     el.addEventListener("pointercancel", this.onPointerUp);
+    el.style.touchAction = "none"; // let pointer drags through without scroll/zoom
 
     // Orientation gizmo: colored triad (R=X, G=Y, B=Z), Z-up like the scene.
     const triad = new THREE.AxesHelper(1);
@@ -129,82 +137,85 @@ export class Viewer {
     this.loop();
   }
 
-  // ── Trackpad: pinch (ctrlKey) zooms, two-finger scroll pans ──────────────
-  // Chromium/Electron encode a trackpad pinch as a wheel event with
-  // ctrlKey=true; a plain two-finger scroll arrives with ctrlKey=false.
+  // ── Trackpad gestures, all via the wheel event ──────────────────────────
+  //  • pinch (ctrlKey)        → zoom    — Chromium encodes a pinch as a wheel
+  //                                       event with ctrlKey=true.
+  //  • Shift + two-finger     → orbit   — pan gesture with Shift held.
+  //  • two-finger scroll      → pan
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     if (e.ctrlKey) this.dolly(e);
+    else if (e.shiftKey) this.orbit(e.deltaX, e.deltaY);
     else this.pan(e.deltaX, e.deltaY);
   };
 
-  // ── Left-drag orbit, pivoting around the MODEL CENTER (origin) ───────────
-  // We rotate the whole camera rig (position + look-target) about the origin,
-  // so orbit always spins the object about its own center even after pan or
-  // cursor-zoom have offset the look-target. (OrbitControls' built-in rotate
-  // pivots around its target, which drifts — hence enableRotate=false.)
+  // ── Mouse / click-drag gestures (left button) ────────────────────────────
+  //  • drag            → orbit
+  //  • Shift + drag    → pan
+  // Pointer capture keeps the gesture alive even when the cursor leaves the
+  // canvas. Movement deltas (movementX/Y) feed the same orbit/pan math as the
+  // wheel path, so a drag accumulates from the *current* camera angle — it
+  // never snaps or resets the view.
   private onPointerDown = (e: PointerEvent): void => {
-    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
-    this.dragging = true;
-    this.lastX = e.clientX;
-    this.lastY = e.clientY;
+    if (e.button !== 0) return; // OrbitControls still owns right-drag pan
+    e.preventDefault();
+    this.drag = e.shiftKey ? "pan" : "orbit";
     this.renderer.domElement.setPointerCapture(e.pointerId);
   };
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (!this.dragging) return;
-    const dx = e.clientX - this.lastX;
-    const dy = e.clientY - this.lastY;
-    this.lastX = e.clientX;
-    this.lastY = e.clientY;
-    this.orbit(dx, dy);
+    if (!this.drag) return;
+    if (this.drag === "orbit")
+      this.orbit(e.movementX, e.movementY, ORBIT_DRAG_SENS);
+    // Grab-style pan: the model tracks the cursor (inverted from wheel deltas).
+    else this.pan(-e.movementX, -e.movementY);
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (!this.dragging) return;
-    this.dragging = false;
-    if (this.renderer.domElement.hasPointerCapture(e.pointerId)) {
-      this.renderer.domElement.releasePointerCapture(e.pointerId);
-    }
+    if (!this.drag) return;
+    this.drag = null;
+    const el = this.renderer.domElement;
+    if (el.hasPointerCapture(e.pointerId))
+      el.releasePointerCapture(e.pointerId);
   };
 
-  /** Rotate camera + target about the origin: azimuth about world-up (Z),
-   *  pitch about the camera's right axis, clamped to avoid pole flips. */
-  private orbit(dx: number, dy: number): void {
+  /** Orbit the camera about the CURRENT look-target: azimuth about world-up
+   *  (Z), pitch about the camera's right axis, clamped to avoid pole flips.
+   *  Rotating about the live target (not a forced origin) means orbit picks up
+   *  from wherever the camera is — it never resets the angle, recenters, or
+   *  undoes a prior pan. `sens` lets pixel-based drags use a different gain
+   *  than the (accelerated) trackpad wheel deltas. */
+  private orbit(dx: number, dy: number, sens = ORBIT_SENS): void {
     const h = this.renderer.domElement.clientHeight || 1;
-    const origin = new THREE.Vector3(0, 0, 0);
+    const k = sens;
+    const pivot = this.controls.target;
 
     const qAz = new THREE.Quaternion().setFromAxisAngle(
       new THREE.Vector3(0, 0, 1),
-      (-2 * Math.PI * dx) / h,
+      (-2 * Math.PI * dx * k) / h,
     );
-    rotateAbout(this.camera.position, origin, qAz);
-    rotateAbout(this.controls.target, origin, qAz);
+    rotateAbout(this.camera.position, pivot, qAz);
 
     const right = new THREE.Vector3()
       .setFromMatrixColumn(this.camera.matrix, 0)
       .normalize();
     const qPitch = new THREE.Quaternion().setFromAxisAngle(
       right,
-      (-2 * Math.PI * dy) / h,
+      (-2 * Math.PI * dy * k) / h,
     );
-    // Skip the pitch if it would push the view past the up/down poles.
-    const tilted = this.camera.position.clone().applyQuaternion(qPitch);
+    // Skip the pitch if it would push the view-direction past the up/down poles.
+    const offset = this.camera.position.clone().sub(pivot);
+    const tilted = offset.clone().applyQuaternion(qPitch);
     const angle = tilted.angleTo(new THREE.Vector3(0, 0, 1));
     if (angle > 0.05 && angle < Math.PI - 0.05) {
-      rotateAbout(this.camera.position, origin, qPitch);
-      rotateAbout(this.controls.target, origin, qPitch);
+      rotateAbout(this.camera.position, pivot, qPitch);
     }
     this.controls.update();
   }
 
-  // Cursor-centered dolly: keep the world point under the pointer fixed by
-  // scaling the camera + target about it (lerp both toward the pivot).
+  // Dolly along the view axis: change camera distance only, leaving the
+  // look-target fixed. No lateral motion → the framing never jumps on zoom.
   private dolly(e: WheelEvent): void {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
     const target = this.controls.target;
     const dist = this.camera.position.distanceTo(target);
     const newDist = THREE.MathUtils.clamp(
@@ -213,25 +224,8 @@ export class Viewer {
       this.radius * 50,
     );
     if (newDist === dist) return;
-
-    // Point under the cursor on the plane through the target, ⊥ to the view.
-    const dir = new THREE.Vector3(ndcX, ndcY, 0.5)
-      .unproject(this.camera)
-      .sub(this.camera.position)
-      .normalize();
-    const viewDir = target.clone().sub(this.camera.position).normalize();
-    const denom = dir.dot(viewDir);
-    const pivot =
-      Math.abs(denom) > 1e-6
-        ? this.camera.position.clone().addScaledVector(dir, dist / denom)
-        : target.clone();
-
-    const f = 1 - newDist / dist; // scale everything about `pivot`
-    this.camera.position.lerp(pivot, f);
-    target.lerp(pivot, f);
-    // Keep the look-target within the model so cursor-zoom can't drift the
-    // framing away from the object (orbit still pivots about the origin).
-    if (target.length() > this.radius) target.setLength(this.radius);
+    const dir = this.camera.position.clone().sub(target).normalize();
+    this.camera.position.copy(target).addScaledVector(dir, newDist);
     this.controls.update();
   }
 
