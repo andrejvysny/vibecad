@@ -1,17 +1,41 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { useBackendStore } from "../../stores/backend.store";
 import { useProjectStore } from "../../stores/project.store";
 import { useAgentStore } from "../../stores/agent.store";
 import { useViewStore } from "../../stores/view.store";
+import { useViewportStore } from "../../stores/viewport.store";
 import { studioUrl } from "../../lib/studio";
 import { ActionButton, Divider, ToolbarButton } from "../ui";
 import { ParamPanel } from "./ParamPanel";
 import { Viewer } from "./viewer";
 import type { Project } from "../../stores/project.store";
 import type { CameraPreset, ExportFormat } from "@shared/types";
+import type {
+  ViewportControlPreset,
+  ViewportMaterialPreset,
+  ViewportProjection,
+  ViewportQuality,
+} from "../../stores/viewport.store";
 
 const CAMERAS: CameraPreset[] = ["front", "top", "iso"];
+const QUALITY_OPTIONS: { value: ViewportQuality; label: string }[] = [
+  { value: "adaptive", label: "Adaptive" },
+  { value: "max", label: "Max" },
+  { value: "performance", label: "Perf" },
+];
+const CONTROL_OPTIONS: { value: ViewportControlPreset; label: string }[] = [
+  { value: "cad", label: "CAD" },
+  { value: "trackpad", label: "Trackpad" },
+];
+const PROJECTION_OPTIONS: { value: ViewportProjection; label: string }[] = [
+  { value: "perspective", label: "Persp" },
+  { value: "orthographic", label: "Ortho" },
+];
+const MATERIAL_OPTIONS: { value: ViewportMaterialPreset; label: string }[] = [
+  { value: "cad-blue", label: "Blue" },
+  { value: "studio-gray", label: "Gray" },
+];
 
 /** Trim a measurement to ≤2 decimals without trailing zeros. */
 function fmt(n: number): string {
@@ -35,6 +59,7 @@ export function Preview({ project }: Props) {
   );
   const [gridCell, setGridCell] = useState(0);
   const [exportOpen, setExportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   // Track which model the viewer currently holds, so a re-render of the SAME
   // model (param tweak / Re-render) preserves the camera instead of re-framing.
@@ -44,6 +69,16 @@ export function Preview({ project }: Props) {
   const backend = backends.find((b) => b.id === project?.modelingBackend);
   const meshVersion = useProjectStore((s) => s.meshVersion);
   const agentRunning = useAgentStore((s) => s.running);
+  const quality = useViewportStore((s) => s.quality);
+  const controlPreset = useViewportStore((s) => s.controlPreset);
+  const projection = useViewportStore((s) => s.projection);
+  const materialPreset = useViewportStore((s) => s.materialPreset);
+  const aoEnabled = useViewportStore((s) => s.aoEnabled);
+  const setQuality = useViewportStore((s) => s.setQuality);
+  const setControlPreset = useViewportStore((s) => s.setControlPreset);
+  const setProjection = useViewportStore((s) => s.setProjection);
+  const setMaterialPreset = useViewportStore((s) => s.setMaterialPreset);
+  const setAoEnabled = useViewportStore((s) => s.setAoEnabled);
 
   const stlPath =
     project && project.activeModel
@@ -58,13 +93,30 @@ export function Preview({ project }: Props) {
   // Set up the three.js scene once.
   useEffect(() => {
     if (!mountRef.current) return;
-    const viewer = new Viewer(mountRef.current);
+    const initial = useViewportStore.getState();
+    const viewer = new Viewer(mountRef.current, {
+      quality: initial.quality,
+      controlPreset: initial.controlPreset,
+      projection: initial.projection,
+      materialPreset: initial.materialPreset,
+      aoEnabled: initial.aoEnabled,
+    });
     viewerRef.current = viewer;
     return () => {
       viewer.dispose();
       viewerRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    viewerRef.current?.setSettings({
+      quality,
+      controlPreset,
+      projection,
+      materialPreset,
+      aoEnabled,
+    });
+  }, [quality, controlPreset, projection, materialPreset, aoEnabled]);
 
   // Load the active model's STL whenever it changes (or is re-exported).
   useEffect(() => {
@@ -124,7 +176,6 @@ export function Preview({ project }: Props) {
     setError(null);
     try {
       await window.api.previewMesh({ projectId: project.id });
-      useProjectStore.getState().bumpMesh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -174,6 +225,71 @@ export function Preview({ project }: Props) {
         <ToolbarButton active={showGrid} onClick={() => setShowGrid((v) => !v)}>
           Grid
         </ToolbarButton>
+        <div className="relative">
+          <ToolbarButton
+            active={settingsOpen}
+            onClick={() => setSettingsOpen((v) => !v)}
+          >
+            View ▾
+          </ToolbarButton>
+          {settingsOpen && (
+            <div className="absolute left-0 mt-1 z-20 w-64 rounded-md border border-white/10 bg-[#161a22] shadow-xl p-2">
+              <SettingsRow label="Quality">
+                {QUALITY_OPTIONS.map((opt) => (
+                  <MenuOption
+                    key={opt.value}
+                    active={quality === opt.value}
+                    onClick={() => setQuality(opt.value)}
+                  >
+                    {opt.label}
+                  </MenuOption>
+                ))}
+              </SettingsRow>
+              <SettingsRow label="Controls">
+                {CONTROL_OPTIONS.map((opt) => (
+                  <MenuOption
+                    key={opt.value}
+                    active={controlPreset === opt.value}
+                    onClick={() => setControlPreset(opt.value)}
+                  >
+                    {opt.label}
+                  </MenuOption>
+                ))}
+              </SettingsRow>
+              <SettingsRow label="Projection">
+                {PROJECTION_OPTIONS.map((opt) => (
+                  <MenuOption
+                    key={opt.value}
+                    active={projection === opt.value}
+                    onClick={() => setProjection(opt.value)}
+                  >
+                    {opt.label}
+                  </MenuOption>
+                ))}
+              </SettingsRow>
+              <SettingsRow label="Material">
+                {MATERIAL_OPTIONS.map((opt) => (
+                  <MenuOption
+                    key={opt.value}
+                    active={materialPreset === opt.value}
+                    onClick={() => setMaterialPreset(opt.value)}
+                  >
+                    {opt.label}
+                  </MenuOption>
+                ))}
+              </SettingsRow>
+              <label className="mt-1 flex items-center justify-between gap-3 px-1 py-1 text-xs text-gray-300">
+                <span>Ambient occlusion</span>
+                <input
+                  type="checkbox"
+                  checked={aoEnabled}
+                  onChange={(e) => setAoEnabled(e.currentTarget.checked)}
+                  className="accent-blue-400"
+                />
+              </label>
+            </div>
+          )}
+        </div>
         <div className="flex-1" />
         <ActionButton
           onClick={() => void handleRender()}
@@ -264,6 +380,44 @@ export function Preview({ project }: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+function SettingsRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 py-1">
+      <span className="text-[11px] text-gray-500">{label}</span>
+      <div className="flex items-center gap-0.5">{children}</div>
+    </div>
+  );
+}
+
+function MenuOption({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+        active
+          ? "bg-white/10 text-gray-100"
+          : "text-gray-400 hover:bg-white/5 hover:text-gray-200"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

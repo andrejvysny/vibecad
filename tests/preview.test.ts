@@ -1,29 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { deriveLatestPreviews } from "../renderer/src/stores/preview";
+import { latestModelBase } from "../renderer/src/stores/preview";
 
-describe("deriveLatestPreviews", () => {
-  it("maps the latest model's PNGs to absolute paths", () => {
-    const files = [
-      "model_001.scad",
-      "model_001_front.png",
-      "model_002.scad",
-      "model_002_front.png",
-      "model_002_iso.png",
-    ];
-    expect(deriveLatestPreviews(files, "/proj")).toEqual({
-      front: "/proj/model_002_front.png",
-      iso: "/proj/model_002_iso.png",
-    });
+describe("latestModelBase", () => {
+  it("returns the highest-versioned source basename", () => {
+    expect(
+      latestModelBase([
+        "model_001.scad",
+        "model_001_front.png",
+        "model_002.scad",
+        "model_002_iso.png",
+      ]),
+    ).toBe("model_002");
   });
 
-  it("returns empty when no source model exists", () => {
-    expect(deriveLatestPreviews(["readme.txt"], "/proj")).toEqual({});
+  it("returns null when no source model exists", () => {
+    expect(latestModelBase(["readme.txt", "model_004_iso.png"])).toBeNull();
   });
 
   it("works for .py sources too", () => {
-    const files = ["model_003.py", "model_003_top.png"];
-    expect(deriveLatestPreviews(files, "/p")).toEqual({
-      top: "/p/model_003_top.png",
-    });
+    expect(latestModelBase(["model_003.py", "model_003_top.png"])).toBe(
+      "model_003",
+    );
+  });
+
+  it("compares numeric suffixes, not lexicographic filenames", () => {
+    expect(latestModelBase(["model_9.scad", "model_10.scad"])).toBe(
+      "model_10",
+    );
   });
 });

@@ -36,3 +36,12 @@ Plan: `~/.claude/plans/act-as-senior-ui-ux-indexed-chipmunk.md`
 - [x] npm test: +3 new passing, 0 regressions (3 PRE-EXISTING failures in
       preview.test.ts — stale `deriveLatestPreviews`, unrelated to this work)
 - [ ] npm run dev:desktop manual pass (see plan §Verification) — needs display
+
+## Premium 3D Viewport
+
+- [x] Add persisted viewport quality/control settings
+- [x] Add compact viewport settings dropdown
+- [x] Upgrade renderer DPR/color/postprocess pipeline
+- [x] Improve CAD material, edges, shadows, AO
+- [x] Fix stale preview tests
+- [x] Verify typecheck, renderer build, tests
