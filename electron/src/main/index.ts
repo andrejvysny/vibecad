@@ -309,13 +309,41 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     mainWindow?.webContents.send("agent:event", event);
   };
 
+  // Watchdog: a healthy run streams partial-message/status events continuously,
+  // so total stdout silence means the CLI stalled on an API/MCP round-trip and
+  // will never exit (close never fires → chat wedged on "Thinking"). Kill it
+  // and surface an error so the UI recovers instead of hanging indefinitely.
+  const idleMs =
+    Number(process.env["VIBECAD_AGENT_IDLE_TIMEOUT_MS"]) || 120_000;
+  let watchdog: NodeJS.Timeout | undefined;
+  let stalled = false;
+  const bumpWatchdog = (): void => {
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      stalled = true;
+      log.error(
+        `[agent:${project.agentId}] no output for ${idleMs}ms — killing stalled run`,
+      );
+      mainWindow?.webContents.send("agent:event", {
+        type: "error",
+        payload: {
+          message: `Agent stalled (no output for ${Math.round(idleMs / 1000)}s) and was stopped. Try again.`,
+        },
+      } satisfies AgentEvent);
+      adapter.kill(child);
+    }, idleMs);
+  };
+  bumpWatchdog();
+
   child.stdout?.on("data", (chunk: Buffer) => {
+    bumpWatchdog();
     for (const line of chunk.toString().split("\n").filter(Boolean)) {
       for (const event of adapter.parseEvent(line)) emit(event);
     }
   });
 
   child.stderr?.on("data", (chunk: Buffer) => {
+    bumpWatchdog();
     log.warn(`[agent:${project.agentId}] stderr: ${chunk.toString()}`);
   });
 
@@ -330,17 +358,23 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
 
   return new Promise<void>((resolve, reject) => {
     child.on("close", (code) => {
+      if (watchdog) clearTimeout(watchdog);
       log.info(`[agent:${project.agentId}] exited code=${code}`);
       persistAssistant();
-      mainWindow?.webContents.send("agent:event", {
-        type: "done",
-        payload: {},
-      } satisfies AgentEvent);
+      // The watchdog already emitted an error + unstuck the UI; don't also send
+      // `done` (which would flip the message status back from error).
+      if (!stalled) {
+        mainWindow?.webContents.send("agent:event", {
+          type: "done",
+          payload: {},
+        } satisfies AgentEvent);
+      }
       // Auto-render the latest model so the preview is deterministic.
       void renderLatest(projectId);
       resolve();
     });
     child.on("error", (err) => {
+      if (watchdog) clearTimeout(watchdog);
       log.error(`[agent:${project.agentId}] error:`, err);
       mainWindow?.webContents.send("agent:event", {
         type: "error",

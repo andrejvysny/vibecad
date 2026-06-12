@@ -301,6 +301,17 @@ function ModelSwitcher({
   );
 }
 
+// Counts up once per second from mount — gives a streaming turn a visible
+// heartbeat so a long, quiet round-trip doesn't read as frozen.
+function Elapsed() {
+  const [s, setS] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setS((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return <span className="tabular-nums">{s}s</span>;
+}
+
 function MessageView({ message }: { message: ChatMessage }) {
   if (message.role === "user") {
     return (
@@ -351,7 +362,13 @@ function MessageView({ message }: { message: ChatMessage }) {
         message.tools.length === 0 && (
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <span className="w-2 h-2 rounded-full bg-gray-500 animate-pulse" />
-            Thinking…
+            Thinking… <Elapsed />
+          </div>
+        )}
+      {message.status === "streaming" &&
+        (message.text !== "" || message.tools.length > 0) && (
+          <div className="text-[11px] text-gray-600">
+            working… <Elapsed />
           </div>
         )}
       {message.result && <ResultCard result={message.result} />}

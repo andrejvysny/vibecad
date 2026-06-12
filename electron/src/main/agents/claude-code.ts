@@ -44,6 +44,11 @@ export const claudeCodeAdapter: AgentAdapter = {
       "stream-json",
       "--include-partial-messages",
       "--verbose",
+      // Run hermetically: ignore the user's global/project MCP servers. A
+      // CAD turn only needs Bash/Read/Write/Edit + the skill dir, and pending
+      // or failed inherited MCP servers can stall the request pipeline (the
+      // turn hangs after a tool call, never exits → chat stuck on "Thinking").
+      "--strict-mcp-config",
       "--allowedTools",
       "Bash,Read,Write,Edit",
       "--add-dir",
