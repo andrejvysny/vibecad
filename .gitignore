@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+.tsbuildinfo
+*.tsbuildinfo
+data/
+.env
+.env.local
+.DS_Store
+electron/dist/
+renderer/dist/
