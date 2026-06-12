@@ -11,7 +11,8 @@ let db: ReturnType<typeof drizzle<typeof schema>> | null = null;
 
 function getMigrationsPath(): string {
   if (app.isPackaged) return join(process.resourcesPath, "migrations");
-  return join(__dirname, "../../../src/main/db/migrations");
+  // Bundled to electron/dist/main/index.js → ../../ reaches electron/.
+  return join(__dirname, "../../src/main/db/migrations");
 }
 
 function getDbPath(): string {
