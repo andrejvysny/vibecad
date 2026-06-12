@@ -1,8 +1,8 @@
 {
-  "name": "openscad-studio-electron",
+  "name": "vibecad-electron",
   "version": "0.1.0",
-  "description": "OpenSCAD Studio desktop application",
-  "author": "OpenSCAD Studio",
+  "description": "VibeCAD desktop application",
+  "author": "VibeCAD",
   "license": "MIT",
   "private": true,
   "main": "dist/main/index.js",

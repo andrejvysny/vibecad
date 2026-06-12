@@ -10,6 +10,7 @@ import type {
   PreviewMeshPayload,
   ReadModelPayload,
   RevealPayload,
+  ImportStepPayload,
   CreateProjectPayload,
   GetProjectPayload,
   DeleteProjectPayload,
@@ -68,6 +69,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("model:preview-mesh", payload),
   readModel: (payload: ReadModelPayload): Promise<string> =>
     ipcRenderer.invoke("model:read", payload),
+  importStep: (payload: ImportStepPayload): Promise<string | null> =>
+    ipcRenderer.invoke("model:import-step", payload),
   revealItem: (payload: RevealPayload): Promise<void> =>
     ipcRenderer.invoke("shell:reveal", payload),
 

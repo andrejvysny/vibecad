@@ -58,6 +58,7 @@ import type {
   PreviewMeshPayload,
   ReadModelPayload,
   RevealPayload,
+  ImportStepPayload,
   CreateProjectPayload,
   GetProjectPayload,
   DeleteProjectPayload,
@@ -93,7 +94,7 @@ if (!app.isPackaged) {
 }
 
 log.info(
-  `[boot] OpenSCAD Studio ${app.getVersion()} | packaged=${app.isPackaged} | platform=${process.platform}-${process.arch}`,
+  `[boot] VibeCAD ${app.getVersion()} | packaged=${app.isPackaged} | platform=${process.platform}-${process.arch}`,
 );
 
 let mainWindow: BrowserWindow | null = null;
@@ -147,7 +148,7 @@ function installSecurityPolicy(): void {
     const headers = details.responseHeaders ?? {};
     const devCsp = [
       "default-src 'self' http://127.0.0.1:*",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://127.0.0.1:*",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: http://127.0.0.1:*",
       "style-src 'self' 'unsafe-inline' http://127.0.0.1:*",
       "img-src 'self' data: blob: http://127.0.0.1:* studio:",
       "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* studio:",
@@ -157,7 +158,7 @@ function installSecurityPolicy(): void {
     ].join("; ");
     const prodCsp = [
       "default-src 'self' file:",
-      "script-src 'self' blob:",
+      "script-src 'self' 'wasm-unsafe-eval' blob:",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: studio:",
       "connect-src 'self' studio:",
@@ -180,7 +181,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 1100,
     minHeight: 720,
-    title: "OpenSCAD Studio",
+    title: "VibeCAD",
     backgroundColor: "#0f1117",
     show: false,
     titleBarStyle: "hidden",
@@ -479,6 +480,29 @@ ipcMain.handle("model:read", async (_e, payload: ReadModelPayload) => {
   const abs = resolve(payload.path);
   if (!isInsideWorkspace(abs)) throw new Error("Path outside workspace");
   return readFile(abs, "utf8");
+});
+
+// Pick an external STEP file and copy it into the project dir. The workspace
+// fs.watch picks the new file up and pushes workspace:changed, so the tree
+// refreshes on its own. Returns the new project-relative filename (or null).
+ipcMain.handle("model:import-step", async (_e, payload: ImportStepPayload) => {
+  if (!mainWindow) return null;
+  const project = getProject(payload.projectId);
+  if (!project) throw new Error(`Project not found: ${payload.projectId}`);
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile"],
+    filters: [{ name: "STEP", extensions: ["step", "stp"] }],
+  });
+  const src = filePaths[0];
+  if (canceled || !src) return null;
+  // Normalize to a safe `.step` filename, avoiding collisions in the dir.
+  const raw = basename(src).replace(/\.(step|stp)$/i, "");
+  const safe = raw.replace(/[^\w.\-]/g, "_") || "imported";
+  const existing = new Set(await readdir(project.dir));
+  let name = `${safe}.step`;
+  for (let i = 2; existing.has(name); i++) name = `${safe}_${i}.step`;
+  await copyFile(src, join(project.dir, name));
+  return name;
 });
 
 /** Resolve the model source path for a param request (active or latest). */

@@ -16,10 +16,10 @@ function getMigrationsPath(): string {
 }
 
 function getDbPath(): string {
-  if (process.env["OPENCAD_DB_PATH"]) return process.env["OPENCAD_DB_PATH"];
+  if (process.env["VIBECAD_DB_PATH"]) return process.env["VIBECAD_DB_PATH"];
   const dir = app.getPath("userData");
   mkdirSync(dir, { recursive: true });
-  return join(dir, "opencad.sqlite");
+  return join(dir, "vibecad.sqlite");
 }
 
 export function initDb(): ReturnType<typeof drizzle<typeof schema>> {

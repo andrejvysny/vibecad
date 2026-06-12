@@ -5,9 +5,9 @@ const versionToken = process.env['RELEASE_NAME'] ?? '${version}'
 
 /** @type {import("electron-builder").Configuration} */
 module.exports = {
-  appId: 'com.openscad-studio.electron',
-  productName: 'OpenSCAD Studio',
-  copyright: '© OpenSCAD Studio',
+  appId: 'com.vibecad.electron',
+  productName: 'VibeCAD',
+  copyright: '© VibeCAD',
 
   electronVersion: require(path.resolve(__dirname, '..', 'node_modules/electron/package.json'))
     .version,
@@ -83,7 +83,7 @@ module.exports = {
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,
-    shortcutName: 'OpenSCAD Studio',
+    shortcutName: 'VibeCAD',
     artifactName: `\${productName}-Setup-${versionToken}.\${ext}`,
   },
   portable: {
@@ -92,11 +92,11 @@ module.exports = {
 
   // -------- Linux --------
   linux: {
-    executableName: 'openscad-studio',
+    executableName: 'vibecad',
     category: 'Development',
     synopsis: 'AI-native parametric CAD',
-    description: 'OpenSCAD Studio desktop application',
+    description: 'VibeCAD desktop application',
     target: ['AppImage', 'deb', 'rpm'],
-    artifactName: `openscad-studio_${versionToken}_\${arch}.\${ext}`,
+    artifactName: `vibecad_${versionToken}_\${arch}.\${ext}`,
   },
 }

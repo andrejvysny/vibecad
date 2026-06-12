@@ -6,6 +6,7 @@ import { useAgentStore } from "../../stores/agent.store";
 import { useViewStore } from "../../stores/view.store";
 import { useViewportStore } from "../../stores/viewport.store";
 import { studioUrl } from "../../lib/studio";
+import { loadStepGeometry } from "../../lib/loadStep";
 import { ActionButton, Divider, ToolbarButton } from "../ui";
 import { ParamPanel } from "./ParamPanel";
 import { Viewer } from "./viewer";
@@ -42,6 +43,23 @@ function fmt(n: number): string {
   return Number(n.toFixed(2)).toString();
 }
 
+type MeshFormat = "stl" | "step";
+// Pick the displayable mesh for the active model: STL first (fast, the
+// re-render default), STEP as fallback for models that only have a B-rep
+// (e.g. imported files).
+function resolveMesh(
+  project: Project | null,
+): { path: string; format: MeshFormat } | null {
+  if (!project?.activeModel) return null;
+  const base = project.activeModel;
+  for (const format of ["stl", "step"] as const) {
+    if (project.files.includes(`${base}.${format}`)) {
+      return { path: `${project.dir}/${base}.${format}`, format };
+    }
+  }
+  return null;
+}
+
 interface Props {
   project: Project | null;
 }
@@ -50,6 +68,7 @@ export function Preview({ project }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const [rendering, setRendering] = useState(false);
+  const [converting, setConverting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [empty, setEmpty] = useState(true);
   const [showEdges, setShowEdges] = useState(true);
@@ -80,15 +99,9 @@ export function Preview({ project }: Props) {
   const setMaterialPreset = useViewportStore((s) => s.setMaterialPreset);
   const setAoEnabled = useViewportStore((s) => s.setAoEnabled);
 
-  const stlPath =
-    project && project.activeModel
-      ? `${project.dir}/${project.activeModel}.stl`
-      : null;
-  const hasStl = !!(
-    project &&
-    project.activeModel &&
-    project.files.includes(`${project.activeModel}.stl`)
-  );
+  const mesh = resolveMesh(project);
+  const meshPath = mesh?.path ?? null;
+  const meshFormat = mesh?.format ?? null;
 
   // Set up the three.js scene once.
   useEffect(() => {
@@ -118,11 +131,12 @@ export function Preview({ project }: Props) {
     });
   }, [quality, controlPreset, projection, materialPreset, aoEnabled]);
 
-  // Load the active model's STL whenever it changes (or is re-exported).
+  // Load the active model's mesh whenever it changes (or is re-exported).
+  // STL parses synchronously; STEP is tessellated via the occt-import-js WASM.
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
-    if (!stlPath || !hasStl) {
+    if (!meshPath || !meshFormat) {
       viewer.clear();
       loadedPathRef.current = null;
       setEmpty(true);
@@ -133,27 +147,35 @@ export function Preview({ project }: Props) {
     setError(null);
     // Re-frame only when switching to a different model; keep the view on
     // re-renders of the current one.
-    const resetCamera = loadedPathRef.current !== stlPath;
-    fetch(studioUrl(stlPath))
+    const resetCamera = loadedPathRef.current !== meshPath;
+    const isStep = meshFormat === "step";
+    if (isStep) setConverting(true);
+    fetch(studioUrl(meshPath))
       .then((r) => {
         if (!r.ok) throw new Error(`load failed (${r.status})`);
         return r.arrayBuffer();
       })
-      .then((buf) => {
+      .then((buf) =>
+        isStep ? loadStepGeometry(buf) : new STLLoader().parse(buf),
+      )
+      .then((geometry) => {
         if (cancelled) return;
-        viewer.setGeometry(new STLLoader().parse(buf), { resetCamera });
-        loadedPathRef.current = stlPath;
+        viewer.setGeometry(geometry, { resetCamera });
+        loadedPathRef.current = meshPath;
         setEmpty(false);
         setDims(viewer.getBounds());
         setGridCell(viewer.getGridCell());
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled && isStep) setConverting(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [stlPath, hasStl, meshVersion]);
+  }, [meshPath, meshFormat, meshVersion]);
 
   useEffect(() => {
     viewerRef.current?.setEdgesVisible(showEdges);
@@ -197,7 +219,7 @@ export function Preview({ project }: Props) {
     }
   }
 
-  const busy = rendering || agentRunning;
+  const busy = rendering || agentRunning || converting;
 
   return (
     <div className="flex flex-col h-full">
@@ -347,7 +369,11 @@ export function Preview({ project }: Props) {
         {busy && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-2.5 py-1 rounded-full bg-black/50 border border-white/10 text-xs text-gray-300">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            {rendering ? "Rendering…" : "Working…"}
+            {rendering
+              ? "Rendering…"
+              : converting
+                ? "Converting STEP…"
+                : "Working…"}
           </div>
         )}
 

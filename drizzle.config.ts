@@ -5,7 +5,7 @@ export default defineConfig({
   schema: "./electron/src/main/db/schema.ts",
   out: "./electron/src/main/db/migrations",
   dbCredentials: {
-    url: process.env["OPENCAD_DB_PATH"] ?? "./data/opencad.sqlite",
+    url: process.env["VIBECAD_DB_PATH"] ?? "./data/vibecad.sqlite",
   },
   verbose: true,
   strict: true,

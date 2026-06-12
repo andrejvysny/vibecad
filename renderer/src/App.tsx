@@ -130,7 +130,7 @@ export function App() {
       {/* Main 3-panel layout (resizable + collapsible, persisted) */}
       <PanelGroup
         direction="horizontal"
-        autoSaveId="opencad-main-layout"
+        autoSaveId="vibecad-main-layout"
         className="flex-1 overflow-hidden"
       >
         <Panel

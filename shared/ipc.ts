@@ -45,6 +45,9 @@ export type SetParamResult = { ok: boolean; errors: string[] };
 export type PreviewMeshPayload = { projectId: string; modelPath?: string };
 export type ReadModelPayload = { path: string };
 export type RevealPayload = { path: string };
+// Pick an external STEP file and copy it into the project; returns the new
+// project-relative filename.
+export type ImportStepPayload = { projectId: string };
 
 // Serializable project row sent across IPC (no Date fields).
 export type ProjectRecord = {

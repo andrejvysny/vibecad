@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**OpenSCAD Studio** — local-first, agent-native desktop app for 3D parametric CAD. Wraps Claude Code / OpenCode / Codex (agent axis) over OpenSCAD or build123d (modeling axis). Full spec: `openscad-studio-spec-v0.2.md`. (Product name "OpenSCAD Studio" but db/env use the `opencad`/`OPENCAD` prefix.)
+**VibeCAD** — local-first, agent-native desktop app for 3D parametric CAD. Wraps Claude Code / OpenCode / Codex (agent axis) over OpenSCAD or build123d (modeling axis). Full spec: `openscad-studio-spec-v0.2.md`. (Product name "VibeCAD" but db/env use the `vibecad`/`VIBECAD` prefix.)
 
 ## Commands
 
@@ -29,7 +29,7 @@ Per-workspace: `npm run <script> --workspace electron|renderer` (e.g. `make:mac`
 
 - **Electron 41** main/preload bundled by **tsup** (CJS, `node22`), **React 19** + **Zustand** renderer bundled by **Vite 7** + **Tailwind v4**.
 - **better-sqlite3 + Drizzle ORM** (sqlite). `initDb()` opens WAL + `foreign_keys=ON` and runs migrations on boot (silently skipped if the migrations folder is absent — generate them first).
-- DB path: `OPENCAD_DB_PATH` env, else `app.getPath("userData")/opencad.sqlite`.
+- DB path: `VIBECAD_DB_PATH` env, else `app.getPath("userData")/vibecad.sqlite`.
 - **Zod 4** for runtime validation (shared dep).
 - Agent + modeling runners spawn external CLIs via `child_process` (`spawn`/`execFile`); nothing is bundled — binaries are detected on the user's `PATH`.
 

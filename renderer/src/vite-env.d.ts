@@ -72,6 +72,7 @@ interface ElectronAPI {
   }): Promise<string>;
   readModel(payload: { path: string }): Promise<string>;
   revealItem(payload: { path: string }): Promise<void>;
+  importStep(payload: { projectId: string }): Promise<string | null>;
   // Project
   createProject(payload: {
     name: string;

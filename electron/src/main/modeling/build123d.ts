@@ -1,5 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { cleanSpawnEnv } from "../spawn-env.js";
 import { getSkillsBase } from "../paths.js";
@@ -27,6 +29,40 @@ async function which(bin: string): Promise<string | null> {
 async function pythonHas(pyPath: string, module: string): Promise<boolean> {
   try {
     await execFileAsync(pyPath, ["-c", `import ${module}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Path to a build123d-managed venv interpreter, if one exists. */
+function managedVenvPython(): string | null {
+  const sub =
+    process.platform === "win32"
+      ? ["Scripts", "python.exe"]
+      : ["bin", "python3"];
+  const p = join(homedir(), "openscad-studio", ".venv", ...sub);
+  return existsSync(p) ? p : null;
+}
+
+/**
+ * Resolve the Python interpreter for build123d. The system `python3` is often
+ * too new for OCP wheels, so prefer an explicit override or the managed venv.
+ * Order: OPENCAD_PYTHON env → ~/openscad-studio/.venv → python3 → python.
+ */
+async function resolvePythonBin(): Promise<string | null> {
+  const override = process.env.OPENCAD_PYTHON?.trim();
+  if (override && existsSync(override)) return override;
+  return (
+    managedVenvPython() ?? (await which("python3")) ?? (await which("python"))
+  );
+}
+
+/** f3d is a CLI binary — verify it actually runs (a present-but-broken install
+ *  still resolves on PATH but fails to load its dylibs). */
+async function f3dWorks(): Promise<boolean> {
+  try {
+    await execFileAsync("f3d", ["--version"]);
     return true;
   } catch {
     return false;
@@ -71,19 +107,26 @@ export const build123dBackend: ModelingBackend = {
   skillId: "build123d",
 
   async detect(): Promise<BackendStatus> {
-    const py = (await which("python3")) ?? (await which("python"));
+    const py = await resolvePythonBin();
     if (!py)
       return { available: false, detail: "no python", missing: ["python"] };
 
+    const hasBuild123d = await pythonHas(py, "build123d");
+    // f3d is a standalone CLI the harness shells out to for PNG previews
+    // (render_harness.py). In-app STEP/STL viewing uses the WASM viewer, so f3d
+    // is reported as missing but does NOT gate availability — only build123d does.
     const missing: string[] = [];
-    for (const dep of ["build123d", "f3d"]) {
-      if (!(await pythonHas(py, dep))) missing.push(dep);
-    }
+    if (!hasBuild123d) missing.push("build123d");
+    if (!(await f3dWorks())) missing.push("f3d");
 
-    if (missing.length > 0) return { available: false, detail: py, missing };
+    if (!hasBuild123d) return { available: false, detail: py, missing };
 
     resolvedPython = py;
-    return { available: true, detail: py };
+    return {
+      available: true,
+      detail: py,
+      missing: missing.length ? missing : undefined,
+    };
   },
 
   async render({

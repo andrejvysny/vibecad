@@ -7,6 +7,8 @@ import type { Project } from "../../stores/project.store";
 const SOURCE_EXTS = new Set([".scad", ".py"]);
 const PREVIEW_EXTS = new Set([".png"]);
 const EXPORT_EXTS = new Set([".stl", ".3mf", ".step", ".dxf"]);
+// Formats the 3D viewer can load directly; others just reveal in the OS.
+const DISPLAYABLE = new Set([".stl", ".step"]);
 
 function ext(filename: string): string {
   return filename.slice(filename.lastIndexOf("."));
@@ -67,9 +69,22 @@ export function WorkspaceTree({ project }: Props) {
 
   const groups = buildGroups(project.files);
 
+  const projectId = project.id;
+  async function importStep() {
+    const name = await window.api.importStep({ projectId });
+    if (!name) return;
+    // Focus the freshly imported model and show it in 3D.
+    useProjectStore.getState().setActiveModel(projectId, basename(name));
+    useViewStore.getState().show3d();
+  }
+
   return (
     <div className="flex flex-col h-full">
-      <Header>{project.name}</Header>
+      <Header
+        action={{ label: "Import STEP", onClick: () => void importStep() }}
+      >
+        {project.name}
+      </Header>
       <div className="flex-1 overflow-y-auto py-1">
         {groups.length === 0 && (
           <p className="px-3 py-1 text-xs text-gray-600">No models yet</p>
@@ -97,17 +112,17 @@ function GroupRow({
   active: boolean;
 }) {
   const [open, setOpen] = useState(active);
-  const hasStl = group.exports.some((f) => ext(f) === ".stl");
+  const hasMesh = group.exports.some((f) => DISPLAYABLE.has(ext(f)));
 
-  // Selecting the group: focus this model (3D if an STL exists, else its source).
+  // Selecting the group: focus this model (3D if a mesh exists, else its source).
   function select() {
     useProjectStore.getState().setActiveModel(project.id, group.key);
-    if (hasStl) useViewStore.getState().show3d();
+    if (hasMesh) useViewStore.getState().show3d();
     else if (group.source) useViewStore.getState().showSource(group.source);
   }
 
   function openExport(f: string) {
-    if (ext(f) === ".stl") {
+    if (DISPLAYABLE.has(ext(f))) {
       useProjectStore.getState().setActiveModel(project.id, basename(f));
       useViewStore.getState().show3d();
     } else {
@@ -205,10 +220,24 @@ function Leaf({
   );
 }
 
-function Header({ children }: { children: React.ReactNode }) {
+function Header({
+  children,
+  action,
+}: {
+  children: React.ReactNode;
+  action?: { label: string; onClick: () => void };
+}) {
   return (
-    <div className="px-3 py-2 border-b border-white/10 text-xs font-medium text-gray-400 uppercase tracking-wide truncate">
-      {children}
+    <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10 text-xs font-medium text-gray-400 uppercase tracking-wide">
+      <span className="flex-1 truncate">{children}</span>
+      {action && (
+        <button
+          onClick={action.onClick}
+          className="shrink-0 normal-case px-1.5 py-0.5 rounded border border-white/10 text-[10px] text-gray-300 hover:border-white/30 hover:text-white"
+        >
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

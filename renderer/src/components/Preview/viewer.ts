@@ -7,8 +7,16 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js";
 import { toCreasedNormals } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { CameraPreset } from "@shared/types";
-import { DEFAULT_VIEWPORT_SETTINGS, type ViewportSettings } from "../../stores/viewport.store";
-import { edgeColor, materialParams, resolveViewportBudget, type ViewportBudget } from "./viewerQuality";
+import {
+  DEFAULT_VIEWPORT_SETTINGS,
+  type ViewportSettings,
+} from "../../stores/viewport.store";
+import {
+  edgeColor,
+  materialParams,
+  resolveViewportBudget,
+  type ViewportBudget,
+} from "./viewerQuality";
 import {
   disposeMaterial,
   disposeObject,
@@ -73,9 +81,19 @@ export class Viewer {
   private bounds = { x: 0, y: 0, z: 0 };
   private gridCell = 0;
   private gizmoScene = new THREE.Scene();
-  private gizmoCam = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
+  private gizmoCam = new THREE.OrthographicCamera(
+    -1.6,
+    1.6,
+    1.6,
+    -1.6,
+    0.1,
+    10,
+  );
 
-  constructor(private mount: HTMLElement, settings: ViewportSettings = DEFAULT_VIEWPORT_SETTINGS) {
+  constructor(
+    private mount: HTMLElement,
+    settings: ViewportSettings = DEFAULT_VIEWPORT_SETTINGS,
+  ) {
     this.settings = { ...settings };
     this.budget = resolveViewportBudget(this.settings, this.viewport, 0);
     const el = this.initRenderer();
@@ -95,7 +113,10 @@ export class Viewer {
   }
 
   private initRenderer(): HTMLCanvasElement {
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: false,
+      powerPreference: "high-performance",
+    });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
     this.renderer.toneMappingExposure = 1.0;
@@ -119,12 +140,22 @@ export class Viewer {
 
   private initCameras(): void {
     this.perspectiveCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 100000);
-    this.orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100000);
+    this.orthographicCamera = new THREE.OrthographicCamera(
+      -1,
+      1,
+      1,
+      -1,
+      0.1,
+      100000,
+    );
     [this.perspectiveCamera, this.orthographicCamera].forEach((cam) => {
       cam.up.set(0, 0, 1);
       cam.position.set(1, -1, 1);
     });
-    this.camera = this.settings.projection === "orthographic" ? this.orthographicCamera : this.perspectiveCamera;
+    this.camera =
+      this.settings.projection === "orthographic"
+        ? this.orthographicCamera
+        : this.perspectiveCamera;
   }
 
   private initLighting(): void {
@@ -135,7 +166,10 @@ export class Viewer {
     this.key.shadow.bias = -0.00035;
     this.scene.add(this.key, this.key.target);
 
-    this.shadowPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShadowMaterial({ opacity: 0.25 }));
+    this.shadowPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.ShadowMaterial({ opacity: 0.25 }),
+    );
     this.shadowPlane.receiveShadow = true;
     this.scene.add(this.shadowPlane, this.groundGroup);
   }
@@ -177,8 +211,9 @@ export class Viewer {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    if (this.settings.controlPreset === "cad" || e.ctrlKey) this.dolly(e.deltaY);
-    else if (e.shiftKey) this.orbit(e.deltaX, e.deltaY);
+    if (this.settings.controlPreset === "cad" || e.ctrlKey)
+      this.dolly(e.deltaY);
+    else if (e.shiftKey) this.orbit(-e.deltaX, -e.deltaY);
     else this.pan(e.deltaX, e.deltaY);
   };
 
@@ -191,7 +226,8 @@ export class Viewer {
 
   private onPointerMove = (e: PointerEvent): void => {
     if (!this.drag) return;
-    if (this.drag === "orbit") this.orbit(e.movementX, e.movementY, ORBIT_DRAG_SENS);
+    if (this.drag === "orbit")
+      this.orbit(e.movementX, e.movementY, ORBIT_DRAG_SENS);
     else this.pan(-e.movementX, -e.movementY);
   };
 
@@ -199,19 +235,32 @@ export class Viewer {
     if (!this.drag) return;
     this.drag = null;
     const el = this.renderer.domElement;
-    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    if (el.hasPointerCapture(e.pointerId))
+      el.releasePointerCapture(e.pointerId);
   };
 
   private orbit(dx: number, dy: number, sens = ORBIT_SENS): void {
     const h = this.renderer.domElement.clientHeight || 1;
     const pivot = this.controls.target;
-    const qAz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (-2 * Math.PI * dx * sens) / h);
+    const qAz = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 0, 1),
+      (-2 * Math.PI * dx * sens) / h,
+    );
     rotateAbout(this.camera.position, pivot, qAz);
-    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0).normalize();
-    const qPitch = new THREE.Quaternion().setFromAxisAngle(right, (-2 * Math.PI * dy * sens) / h);
-    const tilted = this.camera.position.clone().sub(pivot).applyQuaternion(qPitch);
+    const right = new THREE.Vector3()
+      .setFromMatrixColumn(this.camera.matrix, 0)
+      .normalize();
+    const qPitch = new THREE.Quaternion().setFromAxisAngle(
+      right,
+      (-2 * Math.PI * dy * sens) / h,
+    );
+    const tilted = this.camera.position
+      .clone()
+      .sub(pivot)
+      .applyQuaternion(qPitch);
     const angle = tilted.angleTo(new THREE.Vector3(0, 0, 1));
-    if (angle > 0.05 && angle < Math.PI - 0.05) rotateAbout(this.camera.position, pivot, qPitch);
+    if (angle > 0.05 && angle < Math.PI - 0.05)
+      rotateAbout(this.camera.position, pivot, qPitch);
     this.controls.update();
   }
 
@@ -227,7 +276,11 @@ export class Viewer {
     }
     const target = this.controls.target;
     const dist = this.camera.position.distanceTo(target);
-    const newDist = THREE.MathUtils.clamp(dist * Math.exp(deltaY * 0.01), this.radius * 0.5, this.radius * 50);
+    const newDist = THREE.MathUtils.clamp(
+      dist * Math.exp(deltaY * 0.01),
+      this.radius * 0.5,
+      this.radius * 50,
+    );
     const dir = this.camera.position.clone().sub(target).normalize();
     this.camera.position.copy(target).addScaledVector(dir, newDist);
     this.controls.update();
@@ -235,14 +288,21 @@ export class Viewer {
 
   private pan(dx: number, dy: number): void {
     const h = this.renderer.domElement.clientHeight || 1;
-    const halfView = this.camera instanceof THREE.PerspectiveCamera
-      ? this.camera.position.distanceTo(this.controls.target) * Math.tan((this.camera.fov / 2) * (Math.PI / 180))
-      : this.orthoHalfHeight;
+    const halfView =
+      this.camera instanceof THREE.PerspectiveCamera
+        ? this.camera.position.distanceTo(this.controls.target) *
+          Math.tan((this.camera.fov / 2) * (Math.PI / 180))
+        : this.orthoHalfHeight;
     const panX = (2 * dx * halfView) / h;
     const panY = (2 * dy * halfView) / h;
-    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0);
+    const right = new THREE.Vector3().setFromMatrixColumn(
+      this.camera.matrix,
+      0,
+    );
     const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 1);
-    const move = new THREE.Vector3().addScaledVector(right, panX).addScaledVector(up, -panY);
+    const move = new THREE.Vector3()
+      .addScaledVector(right, panX)
+      .addScaledVector(up, -panY);
     this.camera.position.add(move);
     this.controls.target.add(move);
     this.controls.update();
@@ -259,7 +319,11 @@ export class Viewer {
   }
 
   private applyRenderBudget(): void {
-    const next = resolveViewportBudget(this.settings, this.viewport, this.triangleCount);
+    const next = resolveViewportBudget(
+      this.settings,
+      this.viewport,
+      this.triangleCount,
+    );
     const edgeChanged = next.edgeThreshold !== this.budget.edgeThreshold;
     this.budget = next;
     this.renderer.setPixelRatio(next.dpr);
@@ -283,7 +347,10 @@ export class Viewer {
     const pad = 10;
     const w = this.viewport.width;
     const h = this.viewport.height;
-    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    const dir = this.camera.position
+      .clone()
+      .sub(this.controls.target)
+      .normalize();
     this.gizmoCam.position.copy(dir.multiplyScalar(4));
     this.gizmoCam.up.copy(this.camera.up);
     this.gizmoCam.lookAt(0, 0, 0);
@@ -305,7 +372,10 @@ export class Viewer {
     this.applyRenderBudget();
   }
 
-  setGeometry(geometry: THREE.BufferGeometry, { resetCamera = true }: { resetCamera?: boolean } = {}): void {
+  setGeometry(
+    geometry: THREE.BufferGeometry,
+    { resetCamera = true }: { resetCamera?: boolean } = {},
+  ): void {
     this.clear();
     const shaded = toCreasedNormals(geometry, CREASE_ANGLE);
     if (shaded !== geometry) geometry.dispose();
@@ -318,9 +388,17 @@ export class Viewer {
     this.bounds = { x: size.x, y: size.y, z: size.z };
     shaded.translate(-center.x, -center.y, -center.z);
     shaded.computeBoundingSphere();
-    this.radius = Math.max(shaded.boundingSphere?.radius ?? size.length() / 2, 1);
+    this.radius = Math.max(
+      shaded.boundingSphere?.radius ?? size.length() / 2,
+      1,
+    );
 
-    this.mesh = new THREE.Mesh(shaded, new THREE.MeshStandardMaterial(materialParams(this.settings.materialPreset)));
+    this.mesh = new THREE.Mesh(
+      shaded,
+      new THREE.MeshStandardMaterial(
+        materialParams(this.settings.materialPreset),
+      ),
+    );
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     this.scene.add(this.mesh);
@@ -340,7 +418,11 @@ export class Viewer {
     }
     this.edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(this.mesh.geometry, this.budget.edgeThreshold),
-      new THREE.LineBasicMaterial({ color: edgeColor(this.settings.materialPreset), transparent: true, opacity: 0.82 }),
+      new THREE.LineBasicMaterial({
+        color: edgeColor(this.settings.materialPreset),
+        transparent: true,
+        opacity: 0.82,
+      }),
     );
     this.edges.visible = this.edgesVisible;
     this.mesh.add(this.edges);
@@ -348,7 +430,9 @@ export class Viewer {
 
   private applyMaterial(): void {
     if (this.mesh?.material instanceof THREE.MeshStandardMaterial) {
-      this.mesh.material.setValues(materialParams(this.settings.materialPreset));
+      this.mesh.material.setValues(
+        materialParams(this.settings.materialPreset),
+      );
       this.mesh.material.needsUpdate = true;
     }
     if (this.edges?.material instanceof THREE.LineBasicMaterial)
@@ -416,14 +500,20 @@ export class Viewer {
 
   private switchCamera(): void {
     const previous = this.camera;
-    const next = this.settings.projection === "orthographic" ? this.orthographicCamera : this.perspectiveCamera;
+    const next =
+      this.settings.projection === "orthographic"
+        ? this.orthographicCamera
+        : this.perspectiveCamera;
     if (next === previous) return;
     next.position.copy(previous.position);
     next.quaternion.copy(previous.quaternion);
     next.up.copy(previous.up);
     if (previous instanceof THREE.PerspectiveCamera) {
       const dist = previous.position.distanceTo(this.controls.target);
-      this.orthoHalfHeight = Math.max(dist * Math.tan((previous.fov * Math.PI) / 360), this.radius * 0.2);
+      this.orthoHalfHeight = Math.max(
+        dist * Math.tan((previous.fov * Math.PI) / 360),
+        this.radius * 0.2,
+      );
     }
     this.camera = next;
     this.controls.object = next;
