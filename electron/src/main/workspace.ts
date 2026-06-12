@@ -26,11 +26,3 @@ export function unwatchProject(projectId: string): void {
   WATCHED.get(projectId)?.close();
   WATCHED.delete(projectId);
 }
-
-export function watchWorkspace(
-  onChange: (projectId: string, files: string[]) => void,
-): void {
-  // Projects are watched individually when opened; this is a no-op placeholder
-  // for a future "watch all active projects" loop.
-  void onChange;
-}

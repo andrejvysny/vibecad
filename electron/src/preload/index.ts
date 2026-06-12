@@ -5,6 +5,10 @@ import type {
   StopAgentPayload,
   ExportModelPayload,
   OpenModelPayload,
+  RenderModelPayload,
+  CreateProjectPayload,
+  GetProjectPayload,
+  ProjectRecord,
   PreviewUpdatedPayload,
   WorkspaceChangedPayload,
 } from "../../../shared/ipc.js";
@@ -37,6 +41,16 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("model:export", payload),
   openModel: (payload: OpenModelPayload): Promise<void> =>
     ipcRenderer.invoke("model:open", payload),
+  renderModel: (payload: RenderModelPayload): Promise<string[]> =>
+    ipcRenderer.invoke("model:render", payload),
+
+  // Project
+  createProject: (payload: CreateProjectPayload): Promise<ProjectRecord> =>
+    ipcRenderer.invoke("project:create", payload),
+  listProjects: (): Promise<ProjectRecord[]> =>
+    ipcRenderer.invoke("project:list"),
+  openProject: (payload: GetProjectPayload): Promise<ProjectRecord> =>
+    ipcRenderer.invoke("project:open", payload),
 
   // Push events from main
   onAgentEvent: (cb: (event: AgentEvent) => void) =>

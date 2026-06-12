@@ -1,18 +1,36 @@
 import { app, BrowserWindow, ipcMain, session, shell } from "electron";
 import { join } from "node:path";
+import { readdir } from "node:fs/promises";
 import log from "electron-log/main";
 import { eq } from "drizzle-orm";
-import { detectAgents, getAdapter, killActive } from "./agents/index.js";
+import {
+  detectAgents,
+  getAdapter,
+  killActive,
+  registerActive,
+} from "./agents/index.js";
 import { detectBackends, getBackend } from "./modeling/index.js";
 import { initDb } from "./db/index.js";
 import { projects } from "./db/schema.js";
-import { watchWorkspace } from "./workspace.js";
+import {
+  createProject,
+  getProject,
+  listProjects,
+  type ProjectRow,
+} from "./projects.js";
+import { getSkillsDir } from "./paths.js";
+import { unwatchProject, watchProject } from "./workspace.js";
 import type {
   RunAgentPayload,
   StopAgentPayload,
   ExportModelPayload,
   OpenModelPayload,
+  RenderModelPayload,
+  CreateProjectPayload,
+  GetProjectPayload,
+  ProjectRecord,
 } from "../../../shared/ipc.js";
+import type { CameraPreset } from "../../../shared/types.js";
 
 log.initialize();
 
@@ -31,11 +49,37 @@ function getRendererUrl(): string {
   return `file://${join(process.resourcesPath, "renderer", "index.html")}`;
 }
 
-function getSkillsDir(backendId: string): string {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, "skills")
-    : join(__dirname, "../../../../skills");
-  return join(base, backendId);
+function toRecord(row: ProjectRow): ProjectRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    dir: row.dir,
+    agentId: row.agentId as ProjectRecord["agentId"],
+    modelingBackend: row.modelingBackend,
+    outputNeed: row.outputNeed,
+  };
+}
+
+// Watch the single active project's dir; push file lists to the renderer.
+let watchedProjectId: string | null = null;
+
+function emitFiles(projectId: string, files: string[]): void {
+  mainWindow?.webContents.send("workspace:changed", { projectId, files });
+}
+
+async function setActiveWatch(projectId: string, dir: string): Promise<void> {
+  if (watchedProjectId && watchedProjectId !== projectId) {
+    unwatchProject(watchedProjectId);
+  }
+  watchedProjectId = projectId;
+  watchProject(projectId, dir, emitFiles);
+  // Emit the current contents immediately so previews populate without waiting
+  // for the next fs event.
+  try {
+    emitFiles(projectId, await readdir(dir));
+  } catch (err) {
+    log.error("[workspace] initial readdir failed:", err);
+  }
 }
 
 function installSecurityPolicy(): void {
@@ -163,6 +207,7 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     skillsDir,
     sessionId,
   });
+  registerActive(projectId, child);
 
   child.stdout?.on("data", (chunk: Buffer) => {
     for (const line of chunk.toString().split("\n").filter(Boolean)) {
@@ -218,6 +263,51 @@ ipcMain.handle("model:open", (_e, payload: OpenModelPayload) => {
   void shell.openPath(payload.modelPath);
 });
 
+ipcMain.handle("model:render", async (_e, payload: RenderModelPayload) => {
+  const { projectId, backendId, modelPath, outDir } = payload;
+  const backend = getBackend(backendId);
+  if (!backend) throw new Error(`Backend not available: ${backendId}`);
+  // build123d's render() needs detect() to have resolved a python path first.
+  await backend.detect();
+  const cameras: CameraPreset[] = ["front", "top", "iso"];
+  const pngs = await backend.render({
+    modelPath,
+    outDir,
+    cameras,
+    size: [800, 600],
+  });
+  for (const png of pngs) {
+    const angle = /_(front|top|iso)\.png$/.exec(png)?.[1] as
+      | CameraPreset
+      | undefined;
+    if (angle) {
+      mainWindow?.webContents.send("preview:updated", {
+        projectId,
+        angle,
+        pngPath: png,
+      });
+    }
+  }
+  return pngs;
+});
+
+// ──── IPC: project ───────────────────────────────────────────────────────────
+
+ipcMain.handle("project:create", async (_e, payload: CreateProjectPayload) => {
+  const row = await createProject(payload);
+  await setActiveWatch(row.id, row.dir);
+  return toRecord(row);
+});
+
+ipcMain.handle("project:list", () => listProjects().map(toRecord));
+
+ipcMain.handle("project:open", async (_e, payload: GetProjectPayload) => {
+  const row = getProject(payload.id);
+  if (!row) throw new Error(`Project not found: ${payload.id}`);
+  await setActiveWatch(row.id, row.dir);
+  return toRecord(row);
+});
+
 // ──── IPC: app ───────────────────────────────────────────────────────────────
 
 ipcMain.handle("app:get-versions", () => ({
@@ -254,9 +344,6 @@ app.whenReady().then(() => {
 
   if (mainWindow) {
     mainWindow.loadURL(getRendererUrl());
-    watchWorkspace((projectId, files) => {
-      mainWindow?.webContents.send("workspace:changed", { projectId, files });
-    });
   }
 
   app.on("activate", () => {

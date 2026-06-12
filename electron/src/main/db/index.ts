@@ -2,8 +2,9 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { app } from "electron";
+import log from "electron-log/main";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import * as schema from "./schema.js";
 
 let db: ReturnType<typeof drizzle<typeof schema>> | null = null;
@@ -29,10 +30,19 @@ export function initDb(): ReturnType<typeof drizzle<typeof schema>> {
 
   db = drizzle(sqlite, { schema });
 
+  const migrationsFolder = getMigrationsPath();
+  if (!existsSync(migrationsFolder)) {
+    // Tables won't exist without migrations — fail loud instead of silently
+    // producing an empty DB. Run `npm run db:generate`.
+    throw new Error(
+      `Migrations folder missing: ${migrationsFolder}. Run \`npm run db:generate\`.`,
+    );
+  }
   try {
-    migrate(db, { migrationsFolder: getMigrationsPath() });
-  } catch {
-    // migrations folder may not exist yet during development before first drizzle-kit generate
+    migrate(db, { migrationsFolder });
+  } catch (err) {
+    log.error("[db] migration failed:", err);
+    throw err;
   }
 
   return db;

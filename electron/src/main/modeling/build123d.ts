@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, join } from "node:path";
-import { app } from "electron";
+import { getSkillsBase } from "../paths.js";
 import type {
   BackendStatus,
   ExportFormat,
@@ -33,10 +33,7 @@ async function pythonHas(pyPath: string, module: string): Promise<boolean> {
 }
 
 function getHarnessPath(): string {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, "skills", "build123d")
-    : join(__dirname, "../../../../../skills/build123d");
-  return join(base, "render_harness.py");
+  return join(getSkillsBase(), "build123d", "render_harness.py");
 }
 
 function spawnAsync(

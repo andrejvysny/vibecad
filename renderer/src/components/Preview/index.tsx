@@ -11,22 +11,42 @@ interface Props {
 
 export function Preview({ project }: Props) {
   const [activeCamera, setActiveCamera] = useState<CameraPreset>("iso");
+  const [rendering, setRendering] = useState(false);
   const backends = useBackendStore((s) => s.detected);
 
   const backend = backends.find((b) => b.id === project?.modelingBackend);
   const pngPath = project?.previews[activeCamera];
 
-  async function handleExport(format: ExportFormat) {
-    const latestModel = project?.files
+  function latestModelPath(): string | null {
+    const latest = project?.files
       .filter((f) =>
         f.endsWith(project.modelingBackend === "openscad" ? ".scad" : ".py"),
       )
+      .sort()
       .at(-1);
-    if (!project || !latestModel) return;
-    await window.api.exportModel({
-      modelPath: `${project.dir}/${latestModel}`,
-      format,
-    });
+    return project && latest ? `${project.dir}/${latest}` : null;
+  }
+
+  async function handleExport(format: ExportFormat) {
+    const modelPath = latestModelPath();
+    if (!modelPath) return;
+    await window.api.exportModel({ modelPath, format });
+  }
+
+  async function handleRender() {
+    const modelPath = latestModelPath();
+    if (!project || !modelPath) return;
+    setRendering(true);
+    try {
+      await window.api.renderModel({
+        projectId: project.id,
+        backendId: project.modelingBackend,
+        modelPath,
+        outDir: project.dir,
+      });
+    } finally {
+      setRendering(false);
+    }
   }
 
   return (
@@ -47,6 +67,13 @@ export function Preview({ project }: Props) {
           </button>
         ))}
         <div className="flex-1" />
+        <button
+          onClick={() => void handleRender()}
+          disabled={rendering || !project}
+          className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-400 hover:border-white/30 hover:text-gray-200 disabled:opacity-40"
+        >
+          {rendering ? "Rendering…" : "Re-render"}
+        </button>
         {backend?.exports.map((fmt) => (
           <button
             key={fmt}
@@ -62,7 +89,7 @@ export function Preview({ project }: Props) {
       <div className="flex-1 flex items-center justify-center bg-[#0a0d12] overflow-hidden">
         {pngPath ? (
           <img
-            src={`file://${pngPath}`}
+            src={`file://${encodeURI(pngPath)}`}
             alt={`${activeCamera} view`}
             className="max-w-full max-h-full object-contain"
           />

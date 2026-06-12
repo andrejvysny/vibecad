@@ -2,11 +2,22 @@
 
 import type {
   AgentEvent,
+  AgentId,
+  BackendId,
   DetectedAgent,
   DetectedBackend,
   ExportFormat,
   CameraPreset,
 } from "@shared/types";
+
+interface ProjectRecord {
+  id: string;
+  name: string;
+  dir: string;
+  agentId: AgentId;
+  modelingBackend: BackendId;
+  outputNeed: "print" | "cad";
+}
 
 interface ElectronAPI {
   // Agent
@@ -24,6 +35,21 @@ interface ElectronAPI {
     format: ExportFormat;
   }): Promise<string>;
   openModel(payload: { modelPath: string }): Promise<void>;
+  renderModel(payload: {
+    projectId: string;
+    backendId: BackendId;
+    modelPath: string;
+    outDir: string;
+  }): Promise<string[]>;
+  // Project
+  createProject(payload: {
+    name: string;
+    agentId: AgentId;
+    modelingBackend: BackendId;
+    outputNeed: "print" | "cad";
+  }): Promise<ProjectRecord>;
+  listProjects(): Promise<ProjectRecord[]>;
+  openProject(payload: { id: string }): Promise<ProjectRecord>;
   // Push events (return unsubscribe fn)
   onAgentEvent(cb: (event: AgentEvent) => void): () => void;
   onPreviewUpdated(

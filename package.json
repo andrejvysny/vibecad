@@ -14,6 +14,7 @@
     "dev:renderer": "npm run dev --workspace renderer",
     "build": "node scripts/ensure-electron-native-deps.mjs && npm run build --workspace renderer && npm run make --workspace electron",
     "typecheck": "npm run typecheck --workspace electron && npm run typecheck --workspace renderer",
+    "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
@@ -22,6 +23,7 @@
     "concurrently": "^9.2.1",
     "drizzle-kit": "^0.31.8",
     "typescript": "~5.8.3",
+    "vitest": "^4.1.8",
     "wait-on": "^9.0.4"
   }
 }

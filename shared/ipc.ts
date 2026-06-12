@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  AgentId,
+  BackendId,
   CameraPreset,
   DetectedAgent,
   DetectedBackend,
@@ -15,6 +17,29 @@ export type RunAgentPayload = {
 export type StopAgentPayload = { projectId: string };
 export type ExportModelPayload = { modelPath: string; format: ExportFormat };
 export type OpenModelPayload = { modelPath: string };
+export type RenderModelPayload = {
+  projectId: string;
+  backendId: BackendId;
+  modelPath: string;
+  outDir: string;
+};
+
+// Serializable project row sent across IPC (no Date fields).
+export type ProjectRecord = {
+  id: string;
+  name: string;
+  dir: string;
+  agentId: AgentId;
+  modelingBackend: BackendId;
+  outputNeed: "print" | "cad";
+};
+export type CreateProjectPayload = {
+  name: string;
+  agentId: AgentId;
+  modelingBackend: BackendId;
+  outputNeed: "print" | "cad";
+};
+export type GetProjectPayload = { id: string };
 
 // Main → Renderer (webContents.send / ipcRenderer.on)
 export type PreviewUpdatedPayload = {

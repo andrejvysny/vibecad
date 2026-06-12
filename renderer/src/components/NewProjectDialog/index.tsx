@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { BackendId } from "@shared/types";
+import { pickBackend } from "@shared/backend-select";
 
 interface Props {
   onClose(): void;
@@ -14,7 +15,7 @@ export function NewProjectDialog({ onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [outputNeed, setOutputNeed] = useState<"print" | "cad">("print");
 
-  const backend: BackendId = outputNeed === "cad" ? "build123d" : "openscad";
+  const backend: BackendId = pickBackend(outputNeed);
 
   function handleCreate() {
     if (!name.trim()) return;

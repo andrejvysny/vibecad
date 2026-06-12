@@ -51,6 +51,13 @@ module.exports = {
       from: path.relative(__dirname, path.join(repoRoot, 'skills')),
       to: 'skills',
     },
+    {
+      from: path.relative(
+        __dirname,
+        path.join(repoRoot, 'electron', 'src', 'main', 'db', 'migrations'),
+      ),
+      to: 'migrations',
+    },
   ],
 
   // -------- macOS --------
