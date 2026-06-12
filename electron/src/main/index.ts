@@ -1,6 +1,22 @@
-import { app, BrowserWindow, ipcMain, session, shell } from "electron";
-import { join } from "node:path";
-import { readdir } from "node:fs/promises";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  net,
+  protocol,
+  session,
+  shell,
+} from "electron";
+import { basename, join, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  readFile,
+  writeFile,
+} from "node:fs/promises";
 import log from "electron-log/main";
 import { eq } from "drizzle-orm";
 import {
@@ -15,24 +31,49 @@ import { projects } from "./db/schema.js";
 import {
   createProject,
   getProject,
+  getWorkspaceRoot,
   listProjects,
   type ProjectRow,
 } from "./projects.js";
+import {
+  getOrCreateSession,
+  insertMessage,
+  listMessages,
+  setAgentSessionId,
+} from "./chat.js";
 import { getSkillsDir } from "./paths.js";
 import { unwatchProject, watchProject } from "./workspace.js";
 import type {
   RunAgentPayload,
   StopAgentPayload,
   ExportModelPayload,
-  OpenModelPayload,
-  RenderModelPayload,
+  PreviewMeshPayload,
+  ReadModelPayload,
+  RevealPayload,
   CreateProjectPayload,
   GetProjectPayload,
   ProjectRecord,
+  ChatHistoryPayload,
+  PickImagesPayload,
+  SaveAttachmentPayload,
 } from "../../../shared/ipc.js";
-import type { CameraPreset } from "../../../shared/types.js";
+import type { AgentEvent } from "../../../shared/types.js";
 
 log.initialize();
+
+// Must run before app `ready`. `studio://` serves project files to the renderer
+// (the renderer's http/file origin cannot load `file://` under webSecurity).
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "studio",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
+]);
 
 if (!app.isPackaged) {
   process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
@@ -93,8 +134,8 @@ function installSecurityPolicy(): void {
       "default-src 'self' http://127.0.0.1:*",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://127.0.0.1:*",
       "style-src 'self' 'unsafe-inline' http://127.0.0.1:*",
-      "img-src 'self' data: blob: http://127.0.0.1:* file:",
-      "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*",
+      "img-src 'self' data: blob: http://127.0.0.1:* studio:",
+      "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* studio:",
       "worker-src 'self' blob:",
       "object-src 'none'",
       "base-uri 'self'",
@@ -103,8 +144,8 @@ function installSecurityPolicy(): void {
       "default-src 'self' file:",
       "script-src 'self' blob:",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: file:",
-      "connect-src 'self'",
+      "img-src 'self' data: blob: studio:",
+      "connect-src 'self' studio:",
       "worker-src 'self' blob:",
       "object-src 'none'",
       "base-uri 'self'",
@@ -181,10 +222,17 @@ ipcMain.handle("agent:detect", async () => {
   return detectAgents();
 });
 
-ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
-  const { prompt, projectId, sessionId } = payload;
+/** Append image attachment paths to the prompt so the agent reads them. */
+function withAttachments(prompt: string, attachments?: string[]): string {
+  if (!attachments?.length) return prompt;
+  const list = attachments.map((p) => `- ${p}`).join("\n");
+  return `${prompt}\n\nAttached image(s) for reference (read them):\n${list}`;
+}
 
-  // Fetch project to determine backend + working dir
+ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
+  const { prompt, projectId, attachments } = payload;
+
+  // Fetch project to determine agent/backend + working dir
   const db = initDb();
   const [project] = db
     .select()
@@ -201,18 +249,38 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
 
   const skillsDir = getSkillsDir(project.modelingBackend);
 
+  // Persist the user turn + resolve a resumable session.
+  const session = getOrCreateSession(projectId, project.agentId);
+  insertMessage(session.id, "user", prompt);
+
   const child = adapter.spawn({
-    prompt,
+    prompt: withAttachments(prompt, attachments),
     workingDir: project.dir,
     skillsDir,
-    sessionId,
+    sessionId: session.agentSessionId ?? undefined,
   });
-  registerActive(projectId, child);
+  registerActive(projectId, adapter.id, child);
+
+  // Accumulate the assistant turn so it can be persisted on close.
+  let assistantText = "";
+  const toolEvents: AgentEvent[] = [];
+
+  const emit = (event: AgentEvent): void => {
+    if (event.type === "session") {
+      setAgentSessionId(session.id, event.payload.sessionId);
+    } else if (event.type === "text_delta") {
+      assistantText += event.payload.text;
+    } else if (event.type === "tool_use" || event.type === "tool_result") {
+      toolEvents.push(event);
+    } else if (event.type === "done" && event.payload.sessionId) {
+      setAgentSessionId(session.id, event.payload.sessionId);
+    }
+    mainWindow?.webContents.send("agent:event", event);
+  };
 
   child.stdout?.on("data", (chunk: Buffer) => {
     for (const line of chunk.toString().split("\n").filter(Boolean)) {
-      const event = adapter.parseEvent(line);
-      mainWindow?.webContents.send("agent:event", event);
+      for (const event of adapter.parseEvent(line)) emit(event);
     }
   });
 
@@ -220,21 +288,33 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     log.warn(`[agent:${project.agentId}] stderr: ${chunk.toString()}`);
   });
 
+  const persistAssistant = (): void => {
+    insertMessage(
+      session.id,
+      "assistant",
+      assistantText,
+      toolEvents.length ? JSON.stringify(toolEvents) : undefined,
+    );
+  };
+
   return new Promise<void>((resolve, reject) => {
     child.on("close", (code) => {
       log.info(`[agent:${project.agentId}] exited code=${code}`);
+      persistAssistant();
       mainWindow?.webContents.send("agent:event", {
         type: "done",
-        payload: { code },
-      });
+        payload: {},
+      } satisfies AgentEvent);
+      // Auto-render the latest model so the preview is deterministic.
+      void renderLatest(projectId);
       resolve();
     });
     child.on("error", (err) => {
       log.error(`[agent:${project.agentId}] error:`, err);
       mainWindow?.webContents.send("agent:event", {
         type: "error",
-        payload: err.message,
-      });
+        payload: { message: err.message },
+      } satisfies AgentEvent);
       reject(err);
     });
   });
@@ -243,6 +323,50 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
 ipcMain.handle("agent:stop", (_e, payload: StopAgentPayload) => {
   killActive(payload.projectId);
 });
+
+ipcMain.handle("chat:history", (_e, payload: ChatHistoryPayload) =>
+  listMessages(payload.projectId),
+);
+
+// ──── IPC: chat attachments ──────────────────────────────────────────────────
+
+async function attachmentsDir(projectId: string): Promise<string> {
+  const project = getProject(projectId);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  const dir = join(project.dir, ".attachments");
+  await mkdir(dir, { recursive: true });
+  return dir;
+}
+
+ipcMain.handle("chat:pick-images", async (_e, payload: PickImagesPayload) => {
+  if (!mainWindow) return [];
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ["openFile", "multiSelections"],
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
+    ],
+  });
+  if (canceled) return [];
+  const dir = await attachmentsDir(payload.projectId);
+  const saved: string[] = [];
+  for (const src of filePaths) {
+    const dest = join(dir, `${Date.now()}_${basename(src)}`);
+    await copyFile(src, dest);
+    saved.push(dest);
+  }
+  return saved;
+});
+
+ipcMain.handle(
+  "chat:save-attachment",
+  async (_e, payload: SaveAttachmentPayload) => {
+    const dir = await attachmentsDir(payload.projectId);
+    const safeName = basename(payload.name).replace(/[^\w.\-]/g, "_");
+    const dest = join(dir, `${Date.now()}_${safeName}`);
+    await writeFile(dest, Buffer.from(payload.dataBase64, "base64"));
+    return dest;
+  },
+);
 
 // ──── IPC: modeling backend ──────────────────────────────────────────────────
 
@@ -259,36 +383,76 @@ ipcMain.handle("model:export", async (_e, payload: ExportModelPayload) => {
   return backend.export(modelPath, format);
 });
 
-ipcMain.handle("model:open", (_e, payload: OpenModelPayload) => {
-  void shell.openPath(payload.modelPath);
+/** The newest model_NNN source file in a project, or null. */
+async function latestModel(project: ProjectRow): Promise<string | null> {
+  const ext = project.modelingBackend === "openscad" ? ".scad" : ".py";
+  const latest = (await readdir(project.dir))
+    .filter((f) => /^model_\d+/.test(f) && f.endsWith(ext))
+    .sort()
+    .at(-1);
+  return latest ? join(project.dir, latest) : null;
+}
+
+/**
+ * Export the preview mesh (STL) for a model and notify the renderer. STL export
+ * is headless (CGAL/CPU, no GL) so it never triggers the GUI-render crash.
+ */
+async function exportPreviewMesh(
+  projectId: string,
+  modelPath: string,
+): Promise<string> {
+  const project = getProject(projectId);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  const backend = getBackend(project.modelingBackend);
+  if (!backend)
+    throw new Error(`Backend not available: ${project.modelingBackend}`);
+  const status = await backend.detect();
+  if (!status.available) {
+    throw new Error(
+      `${backend.name} not available${status.missing ? ` (missing: ${status.missing.join(", ")})` : ""}`,
+    );
+  }
+  const stlPath = await backend.export(modelPath, "stl");
+  mainWindow?.webContents.send("preview:mesh-ready", { projectId, stlPath });
+  return stlPath;
+}
+
+/** Find the newest model in a project and export its preview mesh. */
+async function renderLatest(projectId: string): Promise<void> {
+  try {
+    const project = getProject(projectId);
+    if (!project) return;
+    const modelPath = await latestModel(project);
+    if (!modelPath) return;
+    await exportPreviewMesh(projectId, modelPath);
+  } catch (err) {
+    log.error("[preview] mesh export failed:", err);
+    mainWindow?.webContents.send("preview:error", {
+      projectId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+ipcMain.handle(
+  "model:preview-mesh",
+  async (_e, payload: PreviewMeshPayload) => {
+    const project = getProject(payload.projectId);
+    if (!project) throw new Error(`Project not found: ${payload.projectId}`);
+    const modelPath = payload.modelPath ?? (await latestModel(project));
+    if (!modelPath) throw new Error("No model to preview");
+    return exportPreviewMesh(payload.projectId, modelPath);
+  },
+);
+
+ipcMain.handle("model:read", async (_e, payload: ReadModelPayload) => {
+  const abs = resolve(payload.path);
+  if (!isInsideWorkspace(abs)) throw new Error("Path outside workspace");
+  return readFile(abs, "utf8");
 });
 
-ipcMain.handle("model:render", async (_e, payload: RenderModelPayload) => {
-  const { projectId, backendId, modelPath, outDir } = payload;
-  const backend = getBackend(backendId);
-  if (!backend) throw new Error(`Backend not available: ${backendId}`);
-  // build123d's render() needs detect() to have resolved a python path first.
-  await backend.detect();
-  const cameras: CameraPreset[] = ["front", "top", "iso"];
-  const pngs = await backend.render({
-    modelPath,
-    outDir,
-    cameras,
-    size: [800, 600],
-  });
-  for (const png of pngs) {
-    const angle = /_(front|top|iso)\.png$/.exec(png)?.[1] as
-      | CameraPreset
-      | undefined;
-    if (angle) {
-      mainWindow?.webContents.send("preview:updated", {
-        projectId,
-        angle,
-        pngPath: png,
-      });
-    }
-  }
-  return pngs;
+ipcMain.handle("shell:reveal", (_e, payload: RevealPayload) => {
+  shell.showItemInFolder(resolve(payload.path));
 });
 
 // ──── IPC: project ───────────────────────────────────────────────────────────
@@ -335,10 +499,31 @@ ipcMain.handle(
   },
 );
 
+// ──── studio:// protocol ─────────────────────────────────────────────────────
+
+/** True if `abs` resolves inside the workspace root (anti-traversal guard). */
+function isInsideWorkspace(abs: string): boolean {
+  const root = resolve(getWorkspaceRoot());
+  return abs === root || abs.startsWith(root + sep);
+}
+
+/** Serve project files to the renderer: studio://local/<urlencoded-abs-path>. */
+function registerStudioProtocol(): void {
+  protocol.handle("studio", (request) => {
+    const encoded = request.url.slice("studio://local/".length);
+    const abs = resolve(decodeURIComponent(encoded));
+    if (!isInsideWorkspace(abs)) {
+      return new Response("Forbidden", { status: 403 });
+    }
+    return net.fetch(pathToFileURL(abs).toString());
+  });
+}
+
 // ──── Boot ───────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
   installSecurityPolicy();
+  registerStudioProtocol();
   initDb();
   createWindow();
 

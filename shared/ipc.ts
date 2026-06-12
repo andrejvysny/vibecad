@@ -13,16 +13,28 @@ export type RunAgentPayload = {
   prompt: string;
   projectId: string;
   sessionId?: string;
+  // Absolute paths to image files (already saved into the project) to reference.
+  attachments?: string[];
+};
+export type ChatHistoryPayload = { projectId: string };
+export type ChatMessageRecord = {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  eventsJson?: string;
+};
+export type PickImagesPayload = { projectId: string };
+export type SaveAttachmentPayload = {
+  projectId: string;
+  name: string;
+  dataBase64: string;
 };
 export type StopAgentPayload = { projectId: string };
 export type ExportModelPayload = { modelPath: string; format: ExportFormat };
-export type OpenModelPayload = { modelPath: string };
-export type RenderModelPayload = {
-  projectId: string;
-  backendId: BackendId;
-  modelPath: string;
-  outDir: string;
-};
+// Export the preview STL for a model (latest model if modelPath omitted).
+export type PreviewMeshPayload = { projectId: string; modelPath?: string };
+export type ReadModelPayload = { path: string };
+export type RevealPayload = { path: string };
 
 // Serializable project row sent across IPC (no Date fields).
 export type ProjectRecord = {
@@ -42,11 +54,13 @@ export type CreateProjectPayload = {
 export type GetProjectPayload = { id: string };
 
 // Main → Renderer (webContents.send / ipcRenderer.on)
+export type PreviewMeshReadyPayload = { projectId: string; stlPath: string };
 export type PreviewUpdatedPayload = {
   projectId: string;
   angle: CameraPreset;
   pngPath: string;
 };
+export type PreviewErrorPayload = { projectId: string; message: string };
 export type WorkspaceChangedPayload = { projectId: string; files: string[] };
 export type AgentsDetectedPayload = { agents: DetectedAgent[] };
 export type BackendsDetectedPayload = { backends: DetectedBackend[] };

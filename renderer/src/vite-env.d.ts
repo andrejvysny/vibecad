@@ -7,7 +7,6 @@ import type {
   DetectedAgent,
   DetectedBackend,
   ExportFormat,
-  CameraPreset,
 } from "@shared/types";
 
 interface ProjectRecord {
@@ -19,6 +18,13 @@ interface ProjectRecord {
   outputNeed: "print" | "cad";
 }
 
+interface ChatMessageRecord {
+  id: string;
+  role: "user" | "assistant" | "tool";
+  content: string;
+  eventsJson?: string;
+}
+
 interface ElectronAPI {
   // Agent
   detectAgents(): Promise<DetectedAgent[]>;
@@ -26,21 +32,28 @@ interface ElectronAPI {
     prompt: string;
     projectId: string;
     sessionId?: string;
+    attachments?: string[];
   }): Promise<void>;
   stopAgent(payload: { projectId: string }): Promise<void>;
+  chatHistory(payload: { projectId: string }): Promise<ChatMessageRecord[]>;
+  pickImages(payload: { projectId: string }): Promise<string[]>;
+  saveAttachment(payload: {
+    projectId: string;
+    name: string;
+    dataBase64: string;
+  }): Promise<string>;
   // Modeling
   detectBackends(): Promise<DetectedBackend[]>;
   exportModel(payload: {
     modelPath: string;
     format: ExportFormat;
   }): Promise<string>;
-  openModel(payload: { modelPath: string }): Promise<void>;
-  renderModel(payload: {
+  previewMesh(payload: {
     projectId: string;
-    backendId: BackendId;
-    modelPath: string;
-    outDir: string;
-  }): Promise<string[]>;
+    modelPath?: string;
+  }): Promise<string>;
+  readModel(payload: { path: string }): Promise<string>;
+  revealItem(payload: { path: string }): Promise<void>;
   // Project
   createProject(payload: {
     name: string;
@@ -52,12 +65,11 @@ interface ElectronAPI {
   openProject(payload: { id: string }): Promise<ProjectRecord>;
   // Push events (return unsubscribe fn)
   onAgentEvent(cb: (event: AgentEvent) => void): () => void;
-  onPreviewUpdated(
-    cb: (p: {
-      projectId: string;
-      angle: CameraPreset;
-      pngPath: string;
-    }) => void,
+  onPreviewMeshReady(
+    cb: (p: { projectId: string; stlPath: string }) => void,
+  ): () => void;
+  onPreviewError(
+    cb: (p: { projectId: string; message: string }) => void,
   ): () => void;
   onWorkspaceChanged(
     cb: (p: { projectId: string; files: string[] }) => void,

@@ -14,7 +14,10 @@ const adapters: AgentAdapter[] = [
   codexAdapter,
 ];
 
-const activeProcesses = new Map<string, ChildProcess>();
+const activeProcesses = new Map<
+  string,
+  { child: ChildProcess; adapterId: AgentId }
+>();
 
 export async function detectAgents(): Promise<DetectedAgent[]> {
   return Promise.all(
@@ -34,18 +37,19 @@ export function getAdapter(id: AgentId): AgentAdapter | undefined {
   return adapters.find((a) => a.id === id);
 }
 
-export function registerActive(projectId: string, child: ChildProcess): void {
-  activeProcesses.set(projectId, child);
+export function registerActive(
+  projectId: string,
+  adapterId: AgentId,
+  child: ChildProcess,
+): void {
+  activeProcesses.set(projectId, { child, adapterId });
   child.on("close", () => activeProcesses.delete(projectId));
 }
 
 export function killActive(projectId: string): void {
-  const child = activeProcesses.get(projectId);
-  if (child) {
-    const adapter = adapters.find(
-      (a) => a.id === child.spawnfile?.split("/").pop(),
-    );
-    adapter ? adapter.kill(child) : child.kill("SIGTERM");
-    activeProcesses.delete(projectId);
-  }
+  const active = activeProcesses.get(projectId);
+  if (!active) return;
+  const adapter = getAdapter(active.adapterId);
+  adapter ? adapter.kill(active.child) : active.child.kill("SIGTERM");
+  activeProcesses.delete(projectId);
 }

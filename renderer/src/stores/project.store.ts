@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import type { AgentId, BackendId, CameraPreset } from "@shared/types";
+import type { AgentId, BackendId } from "@shared/types";
 import { useAgentStore } from "./agent.store";
-import { deriveLatestPreviews } from "./preview";
+import { latestModelBase } from "./preview";
 
 export interface Project {
   id: string;
@@ -11,16 +11,21 @@ export interface Project {
   modelingBackend: "openscad" | "build123d";
   outputNeed: "print" | "cad";
   files: string[];
-  previews: Partial<Record<CameraPreset, string>>;
+  // Active model basename (e.g. "model_003") driving the preview / source view.
+  activeModel: string | null;
 }
 
 interface ProjectStore {
   projects: Project[];
   activeProjectId: string | null;
   activeProject: Project | null;
+  // Bumped whenever a preview mesh is re-exported, to force the viewer to reload
+  // even when the STL filename is unchanged.
+  meshVersion: number;
   setActive(id: string): void;
   setFiles(projectId: string, files: string[]): void;
-  setPreview(projectId: string, angle: CameraPreset, pngPath: string): void;
+  setActiveModel(projectId: string, base: string): void;
+  bumpMesh(): void;
   addProject(project: Project): void;
   loadProjects(): Promise<void>;
   createProject(params: {
@@ -34,11 +39,15 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   projects: [],
   activeProjectId: null,
   activeProject: null,
+  meshVersion: 0,
 
   setActive(id) {
     const project = get().projects.find((p) => p.id === id) ?? null;
     set({ activeProjectId: id, activeProject: project });
-    if (project) void window.api.openProject({ id });
+    if (project) {
+      void window.api.openProject({ id });
+      void useAgentStore.getState().loadHistory(id);
+    }
   },
 
   setFiles(projectId, files) {
@@ -48,10 +57,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
           ? {
               ...p,
               files,
-              previews: {
-                ...p.previews,
-                ...deriveLatestPreviews(files, p.dir),
-              },
+              // Default the active model to the newest one if none picked yet.
+              activeModel: p.activeModel ?? latestModelBase(files),
             }
           : p;
       return {
@@ -61,17 +68,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     });
   },
 
-  setPreview(projectId, angle, pngPath) {
+  setActiveModel(projectId, base) {
     set((s) => {
-      const update = (p: Project) =>
-        p.id === projectId
-          ? { ...p, previews: { ...p.previews, [angle]: pngPath } }
-          : p;
+      const apply = (p: Project): Project =>
+        p.id === projectId ? { ...p, activeModel: base } : p;
       return {
-        projects: s.projects.map(update),
-        activeProject: s.activeProject ? update(s.activeProject) : null,
+        projects: s.projects.map(apply),
+        activeProject: s.activeProject ? apply(s.activeProject) : null,
       };
     });
+  },
+
+  bumpMesh() {
+    set((s) => ({ meshVersion: s.meshVersion + 1 }));
   },
 
   addProject(project) {
@@ -81,7 +90,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   async loadProjects() {
     const records = await window.api.listProjects();
     set({
-      projects: records.map((r) => ({ ...r, files: [], previews: {} })),
+      projects: records.map((r) => ({ ...r, files: [], activeModel: null })),
     });
     const first = get().projects[0];
     if (first && !get().activeProjectId) get().setActive(first.id);
@@ -98,7 +107,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       modelingBackend: backend,
       outputNeed,
     });
-    const project: Project = { ...record, files: [], previews: {} };
+    const project: Project = { ...record, files: [], activeModel: null };
     get().addProject(project);
     get().setActive(record.id);
     return project;

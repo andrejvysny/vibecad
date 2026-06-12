@@ -13,17 +13,30 @@ export interface SpawnOpts {
   env?: Record<string, string>;
 }
 
-export interface AgentEvent {
-  type: "text_delta" | "tool_use" | "tool_result" | "done" | "error" | "raw";
-  payload: unknown;
-}
+// Normalized event vocabulary the renderer understands, regardless of which
+// agent CLI produced it. Adapters translate native stream formats into these.
+export type AgentEvent =
+  | { type: "session"; payload: { sessionId: string } }
+  | { type: "text_delta"; payload: { text: string } }
+  | { type: "tool_use"; payload: { id: string; name: string; input: unknown } }
+  | {
+      type: "tool_result";
+      payload: { toolUseId: string; content: unknown; isError: boolean };
+    }
+  | {
+      type: "done";
+      payload: { sessionId?: string; isError?: boolean; result?: string };
+    }
+  | { type: "error"; payload: { message: string } }
+  | { type: "raw"; payload: unknown };
 
 export interface AgentAdapter {
   readonly id: AgentId;
   readonly name: string;
   detect(): Promise<string | null>;
   spawn(opts: SpawnOpts): ChildProcess;
-  parseEvent(line: string): AgentEvent;
+  // A single stdout line can carry multiple content blocks → multiple events.
+  parseEvent(line: string): AgentEvent[];
   kill(child: ChildProcess): void;
 }
 

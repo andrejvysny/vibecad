@@ -8,6 +8,13 @@
       "when": 1781274004066,
       "tag": "0000_motionless_ironclad",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1781276182741,
+      "tag": "0001_thin_rocket_racer",
+      "breakpoints": true
     }
   ]
 }

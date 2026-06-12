@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { cleanSpawnEnv } from "../spawn-env.js";
 import type {
   AgentAdapter,
   AgentEvent,
@@ -34,24 +35,29 @@ export const openCodeAdapter: AgentAdapter = {
       ["run", "--format", "json", "--agent", "build", promptWithSkill],
       {
         cwd: opts.workingDir,
-        env: { ...process.env, ...opts.env },
+        env: cleanSpawnEnv(opts.env),
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
     return child;
   },
 
-  parseEvent(line: string): AgentEvent {
+  parseEvent(line: string): AgentEvent[] {
     try {
       const obj = JSON.parse(line) as Record<string, unknown>;
       const type = obj["type"] as string;
-      if (type === "message" || type === "text")
-        return { type: "text_delta", payload: obj };
+      if (type === "message" || type === "text") {
+        const text =
+          (obj["text"] as string | undefined) ??
+          (obj["content"] as string | undefined) ??
+          "";
+        return [{ type: "text_delta", payload: { text } }];
+      }
       if (type === "done" || type === "complete")
-        return { type: "done", payload: obj };
-      return { type: "raw", payload: obj };
+        return [{ type: "done", payload: {} }];
+      return [{ type: "raw", payload: obj }];
     } catch {
-      return { type: "raw", payload: line };
+      return [{ type: "raw", payload: line }];
     }
   },
 

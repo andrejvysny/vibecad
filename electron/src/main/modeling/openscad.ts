@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, join } from "node:path";
+import { cleanSpawnEnv } from "../spawn-env.js";
 import type {
   BackendStatus,
   CameraPreset,
@@ -34,12 +35,24 @@ function spawnAsync(
   cmd: string,
   args: string[],
 ): Promise<{ code: number; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] });
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: cleanSpawnEnv(),
+    });
     let stderr = "";
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    child.on("error", reject);
     child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
   });
+}
+
+/** Run a backend CLI and throw with stderr if it exits non-zero. */
+async function run(cmd: string, args: string[]): Promise<void> {
+  const { code, stderr } = await spawnAsync(cmd, args);
+  if (code !== 0) {
+    throw new Error(stderr.trim() || `${cmd} exited with code ${code}`);
+  }
 }
 
 export const openscadBackend: ModelingBackend = {
@@ -66,7 +79,7 @@ export const openscadBackend: ModelingBackend = {
     const out: string[] = [];
     for (const cam of cameras) {
       const png = join(outDir, `${base}_${cam}.png`);
-      await spawnAsync("openscad", [
+      await run("openscad", [
         "--render",
         modelPath,
         "-o",
@@ -81,7 +94,7 @@ export const openscadBackend: ModelingBackend = {
 
   async export(modelPath: string, format: ExportFormat): Promise<string> {
     const out = modelPath.replace(".scad", `.${format}`);
-    await spawnAsync("openscad", [modelPath, "-o", out]);
+    await run("openscad", [modelPath, "-o", out]);
     return out;
   },
 

@@ -1,58 +1,239 @@
 import { create } from "zustand";
 import type { AgentEvent, DetectedAgent } from "@shared/types";
 
+export interface ToolCard {
+  id: string;
+  name: string;
+  input: unknown;
+  result?: unknown;
+  isError?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  tools: ToolCard[];
+  status: "streaming" | "done" | "error";
+  attachments?: string[];
+}
+
+interface RunPayload {
+  prompt: string;
+  projectId: string;
+  attachments?: string[];
+}
+
 interface AgentStore {
   detected: DetectedAgent[];
   activeAgentId: string | null;
   running: boolean;
-  events: AgentEvent[];
+  messages: ChatMessage[];
   detect(): Promise<void>;
-  run(payload: {
-    prompt: string;
-    projectId: string;
-    sessionId?: string;
-  }): Promise<void>;
+  run(payload: RunPayload): Promise<void>;
   stop(projectId: string): Promise<void>;
   pushEvent(event: AgentEvent): void;
-  clearEvents(): void;
+  loadHistory(projectId: string): Promise<void>;
+  clear(): void;
 }
 
-export const useAgentStore = create<AgentStore>((set, get) => ({
-  detected: [],
-  activeAgentId: null,
-  running: false,
-  events: [],
+const uid = (): string => crypto.randomUUID();
 
-  async detect() {
-    const agents = await window.api.detectAgents();
-    const active = agents.find((a) => a.available);
-    set({ detected: agents, activeAgentId: active?.id ?? null });
-  },
-
-  async run(payload) {
-    set({ running: true, events: [] });
-    try {
-      await window.api.runAgent(payload);
-    } finally {
-      set({ running: false });
+// Reconstruct an assistant turn's tool timeline from persisted events JSON.
+function hydrateTools(eventsJson?: string): ToolCard[] {
+  if (!eventsJson) return [];
+  let events: AgentEvent[];
+  try {
+    events = JSON.parse(eventsJson) as AgentEvent[];
+  } catch {
+    return [];
+  }
+  const tools: ToolCard[] = [];
+  for (const ev of events) {
+    if (ev.type === "tool_use") {
+      tools.push({
+        id: ev.payload.id,
+        name: ev.payload.name,
+        input: ev.payload.input,
+      });
+    } else if (ev.type === "tool_result") {
+      const card = tools.find((t) => t.id === ev.payload.toolUseId);
+      if (card) {
+        card.result = ev.payload.content;
+        card.isError = ev.payload.isError;
+      }
     }
-  },
+  }
+  return tools;
+}
 
-  async stop(projectId) {
-    await window.api.stopAgent({ projectId });
-    set({ running: false });
-  },
+// ── rAF-batched text deltas ──────────────────────────────────────────────────
+// Buffer text between animation frames so fast streaming doesn't thrash React.
+let pendingText = "";
+let rafHandle: number | null = null;
 
-  pushEvent(event) {
-    if (event.type === "done") {
-      set((s) => ({ events: [...s.events, event], running: false }));
-    } else {
-      set((s) => ({ events: [...s.events, event] }));
+export const useAgentStore = create<AgentStore>((set, get) => {
+  // Apply buffered text to the trailing streaming assistant message.
+  const flushText = (): void => {
+    rafHandle = null;
+    if (!pendingText) return;
+    const chunk = pendingText;
+    pendingText = "";
+    set((s) => ({
+      messages: patchLast(s.messages, (m) => ({ ...m, text: m.text + chunk })),
+    }));
+  };
+
+  return {
+    detected: [],
+    activeAgentId: null,
+    running: false,
+    messages: [],
+
+    async detect() {
+      const agents = await window.api.detectAgents();
+      const active = agents.find((a) => a.available);
+      set({ detected: agents, activeAgentId: active?.id ?? null });
+    },
+
+    async run({ prompt, projectId, attachments }) {
+      const userMsg: ChatMessage = {
+        id: uid(),
+        role: "user",
+        text: prompt,
+        tools: [],
+        status: "done",
+        attachments,
+      };
+      const assistantMsg: ChatMessage = {
+        id: uid(),
+        role: "assistant",
+        text: "",
+        tools: [],
+        status: "streaming",
+      };
+      set((s) => ({
+        running: true,
+        messages: [...s.messages, userMsg, assistantMsg],
+      }));
+      try {
+        await window.api.runAgent({ prompt, projectId, attachments });
+      } catch (err) {
+        get().pushEvent({
+          type: "error",
+          payload: {
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      } finally {
+        set({ running: false });
+      }
+    },
+
+    async stop(projectId) {
+      await window.api.stopAgent({ projectId });
+      set((s) => ({
+        running: false,
+        messages: patchLast(s.messages, (m) =>
+          m.status === "streaming" ? { ...m, status: "done" } : m,
+        ),
+      }));
+    },
+
+    pushEvent(event) {
+      switch (event.type) {
+        case "text_delta":
+          pendingText += event.payload.text;
+          if (rafHandle === null) rafHandle = requestAnimationFrame(flushText);
+          return;
+        case "tool_use": {
+          flushText();
+          const card: ToolCard = {
+            id: event.payload.id,
+            name: event.payload.name,
+            input: event.payload.input,
+          };
+          set((s) => ({
+            messages: patchLast(s.messages, (m) => ({
+              ...m,
+              tools: [...m.tools, card],
+            })),
+          }));
+          return;
+        }
+        case "tool_result":
+          flushText();
+          set((s) => ({
+            messages: patchLast(s.messages, (m) => ({
+              ...m,
+              tools: m.tools.map((t) =>
+                t.id === event.payload.toolUseId
+                  ? {
+                      ...t,
+                      result: event.payload.content,
+                      isError: event.payload.isError,
+                    }
+                  : t,
+              ),
+            })),
+          }));
+          return;
+        case "done":
+          flushText();
+          set((s) => ({
+            running: false,
+            messages: patchLast(s.messages, (m) => ({ ...m, status: "done" })),
+          }));
+          return;
+        case "error":
+          flushText();
+          set((s) => ({
+            running: false,
+            messages: patchLast(s.messages, (m) => ({
+              ...m,
+              status: "error",
+              text:
+                m.text + (m.text ? "\n\n" : "") + `⚠ ${event.payload.message}`,
+            })),
+          }));
+          return;
+        default:
+          return; // session / raw: not surfaced
+      }
+    },
+
+    async loadHistory(projectId) {
+      const records = await window.api.chatHistory({ projectId });
+      set({
+        messages: records
+          .filter((r) => r.role !== "tool")
+          .map((r) => ({
+            id: r.id,
+            role: r.role as "user" | "assistant",
+            text: r.content,
+            tools: r.role === "assistant" ? hydrateTools(r.eventsJson) : [],
+            status: "done" as const,
+          })),
+      });
+    },
+
+    clear() {
+      set({ messages: [] });
+    },
+  };
+});
+
+/** Replace the trailing assistant message via `fn` (no-op if none streaming). */
+function patchLast(
+  messages: ChatMessage[],
+  fn: (m: ChatMessage) => ChatMessage,
+): ChatMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]!.role === "assistant") {
+      const next = messages.slice();
+      next[i] = fn(messages[i]!);
+      return next;
     }
-    void get;
-  },
-
-  clearEvents() {
-    set({ events: [] });
-  },
-}));
+  }
+  return messages;
+}

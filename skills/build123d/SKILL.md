@@ -10,14 +10,9 @@ You are generating parametric 3D models using build123d (Python, OpenCascade B-r
    result = my_part  # render harness requires this
    ```
 3. Top-level numeric parameters must be bare module-level assignments: `wall = 2.5`
-4. After writing the file, render three PNG previews using the render harness:
-   ```
-   python render_harness.py model_NNN.py --camera front --out model_NNN_front.png --size 800x600
-   python render_harness.py model_NNN.py --camera top   --out model_NNN_top.png   --size 800x600
-   python render_harness.py model_NNN.py --camera iso   --out model_NNN_iso.png   --size 800x600
-   ```
-5. Validate: `python render_harness.py model_NNN.py --check`
-6. Export only when requested:
+4. **Do NOT render PNGs.** The app renders the 3D preview itself from the `.py` you write — your job is only to produce a correct model whose final solid is `result`.
+5. Validate headlessly: `python render_harness.py model_NNN.py --check` (a zero exit code means `result` builds). Fix any reported errors and re-check.
+6. Export only when the user explicitly asks:
    ```
    python render_harness.py model_NNN.py --export step --out model_NNN.step
    python render_harness.py model_NNN.py --export stl  --out model_NNN.stl

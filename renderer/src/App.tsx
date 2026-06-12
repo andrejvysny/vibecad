@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import { useProjectStore } from "./stores/project.store";
 import { useBackendStore } from "./stores/backend.store";
 import { useAgentStore } from "./stores/agent.store";
+import { useViewStore } from "./stores/view.store";
 import { WorkspaceTree } from "./components/WorkspaceTree";
 import { Preview } from "./components/Preview";
+import { SourceViewer } from "./components/SourceViewer";
 import { Chat } from "./components/Chat";
 import { Settings } from "./components/Settings";
 import { NewProjectDialog } from "./components/NewProjectDialog";
+import { studioUrl } from "./lib/studio";
+import type { Project } from "./stores/project.store";
 
 export function App() {
   const initAgents = useAgentStore((s) => s.detect);
@@ -35,15 +39,17 @@ export function App() {
         useProjectStore.getState().setFiles(projectId, files);
       },
     );
-    const unsubPreview = window.api.onPreviewUpdated(
-      ({ projectId, angle, pngPath }) => {
-        useProjectStore.getState().setPreview(projectId, angle, pngPath);
-      },
-    );
+    const unsubMesh = window.api.onPreviewMeshReady(() => {
+      useProjectStore.getState().bumpMesh();
+    });
+    const unsubPreviewError = window.api.onPreviewError(({ message }) => {
+      setError(`Preview render failed: ${message}`);
+    });
     return () => {
       unsubEvent();
       unsubWorkspace();
-      unsubPreview();
+      unsubMesh();
+      unsubPreviewError();
     };
   }, []);
 
@@ -90,12 +96,12 @@ export function App() {
           <WorkspaceTree project={activeProject} />
         </div>
 
-        {/* Center: Preview or Settings */}
+        {/* Center: Preview / Source / Image / Settings */}
         <div className="flex-1 overflow-hidden flex flex-col border-r border-white/10">
           {view === "settings" ? (
             <Settings />
           ) : (
-            <Preview project={activeProject} />
+            <CenterPane project={activeProject} />
           )}
         </div>
 
@@ -126,4 +132,36 @@ export function App() {
       )}
     </div>
   );
+}
+
+function CenterPane({ project }: { project: Project | null }) {
+  const mode = useViewStore((s) => s.mode);
+  const file = useViewStore((s) => s.file);
+
+  if (mode === "source" && project && file) {
+    return <SourceViewer project={project} file={file} />;
+  }
+  if (mode === "image" && project && file) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+          <button
+            onClick={() => useViewStore.getState().show3d()}
+            className="px-2 py-0.5 text-xs border border-white/10 rounded text-gray-400 hover:border-white/30"
+          >
+            ← 3D
+          </button>
+          <span className="text-xs text-gray-400 truncate">{file}</span>
+        </div>
+        <div className="flex-1 flex items-center justify-center bg-[#0a0d12] overflow-hidden">
+          <img
+            src={studioUrl(`${project.dir}/${file}`)}
+            alt={file}
+            className="max-w-full max-h-full object-contain"
+          />
+        </div>
+      </div>
+    );
+  }
+  return <Preview project={project} />;
 }

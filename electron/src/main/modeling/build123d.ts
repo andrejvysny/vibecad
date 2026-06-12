@@ -1,6 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, join } from "node:path";
+import { cleanSpawnEnv } from "../spawn-env.js";
 import { getSkillsBase } from "../paths.js";
 import type {
   BackendStatus,
@@ -40,12 +41,24 @@ function spawnAsync(
   cmd: string,
   args: string[],
 ): Promise<{ code: number; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] });
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: cleanSpawnEnv(),
+    });
     let stderr = "";
     child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    child.on("error", reject);
     child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
   });
+}
+
+/** Run the harness and throw with stderr if it exits non-zero. */
+async function run(cmd: string, args: string[]): Promise<void> {
+  const { code, stderr } = await spawnAsync(cmd, args);
+  if (code !== 0) {
+    throw new Error(stderr.trim() || `${cmd} exited with code ${code}`);
+  }
 }
 
 let resolvedPython: string | null = null;
@@ -86,7 +99,7 @@ export const build123dBackend: ModelingBackend = {
     const out: string[] = [];
     for (const cam of cameras) {
       const png = join(outDir, `${base}_${cam}.png`);
-      await spawnAsync(py, [
+      await run(py, [
         harness,
         modelPath,
         "--camera",
@@ -106,14 +119,7 @@ export const build123dBackend: ModelingBackend = {
     if (!py) throw new Error("build123d not available");
     const harness = getHarnessPath();
     const out = modelPath.replace(".py", `.${format}`);
-    await spawnAsync(py, [
-      harness,
-      modelPath,
-      "--export",
-      format,
-      "--out",
-      out,
-    ]);
+    await run(py, [harness, modelPath, "--export", format, "--out", out]);
     return out;
   },
 

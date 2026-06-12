@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { cleanSpawnEnv } from "../spawn-env.js";
 import type {
   AgentAdapter,
   AgentEvent,
@@ -32,16 +33,16 @@ export const codexAdapter: AgentAdapter = {
       ["--approval-mode", "auto-edit", "--quiet", opts.prompt],
       {
         cwd: opts.workingDir,
-        env: { ...process.env, ...opts.env },
+        env: cleanSpawnEnv(opts.env),
         stdio: ["pipe", "pipe", "pipe"],
       },
     );
     return child;
   },
 
-  parseEvent(line: string): AgentEvent {
-    // Codex emits plain text; wrap as text_delta
-    return { type: "text_delta", payload: line };
+  parseEvent(line: string): AgentEvent[] {
+    // Codex emits plain text; wrap each line as a text delta (keep newline).
+    return [{ type: "text_delta", payload: { text: `${line}\n` } }];
   },
 
   kill(child) {

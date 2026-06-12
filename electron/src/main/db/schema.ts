@@ -19,6 +19,8 @@ export const sessions = sqliteTable("sessions", {
     .notNull()
     .references(() => projects.id),
   agentId: text("agent_id").notNull(),
+  // The CLI's own session id, used to resume the conversation (--resume).
+  agentSessionId: text("agent_session_id"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 
@@ -29,6 +31,8 @@ export const messages = sqliteTable("messages", {
     .references(() => sessions.id),
   role: text("role").notNull().$type<"user" | "assistant" | "tool">(),
   content: text("content").notNull(),
+  // Assistant turn's serialized tool timeline (JSON) for reload.
+  eventsJson: text("events_json"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 

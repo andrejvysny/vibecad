@@ -4,13 +4,20 @@ import type {
   RunAgentPayload,
   StopAgentPayload,
   ExportModelPayload,
-  OpenModelPayload,
-  RenderModelPayload,
+  PreviewMeshPayload,
+  ReadModelPayload,
+  RevealPayload,
   CreateProjectPayload,
   GetProjectPayload,
   ProjectRecord,
   PreviewUpdatedPayload,
+  PreviewErrorPayload,
+  PreviewMeshReadyPayload,
   WorkspaceChangedPayload,
+  ChatHistoryPayload,
+  ChatMessageRecord,
+  PickImagesPayload,
+  SaveAttachmentPayload,
 } from "../../../shared/ipc.js";
 import type {
   AgentEvent,
@@ -33,16 +40,24 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("agent:run", payload),
   stopAgent: (payload: StopAgentPayload): Promise<void> =>
     ipcRenderer.invoke("agent:stop", payload),
+  chatHistory: (payload: ChatHistoryPayload): Promise<ChatMessageRecord[]> =>
+    ipcRenderer.invoke("chat:history", payload),
+  pickImages: (payload: PickImagesPayload): Promise<string[]> =>
+    ipcRenderer.invoke("chat:pick-images", payload),
+  saveAttachment: (payload: SaveAttachmentPayload): Promise<string> =>
+    ipcRenderer.invoke("chat:save-attachment", payload),
 
   // Modeling backend
   detectBackends: (): Promise<DetectedBackend[]> =>
     ipcRenderer.invoke("backend:detect"),
   exportModel: (payload: ExportModelPayload): Promise<string> =>
     ipcRenderer.invoke("model:export", payload),
-  openModel: (payload: OpenModelPayload): Promise<void> =>
-    ipcRenderer.invoke("model:open", payload),
-  renderModel: (payload: RenderModelPayload): Promise<string[]> =>
-    ipcRenderer.invoke("model:render", payload),
+  previewMesh: (payload: PreviewMeshPayload): Promise<string> =>
+    ipcRenderer.invoke("model:preview-mesh", payload),
+  readModel: (payload: ReadModelPayload): Promise<string> =>
+    ipcRenderer.invoke("model:read", payload),
+  revealItem: (payload: RevealPayload): Promise<void> =>
+    ipcRenderer.invoke("shell:reveal", payload),
 
   // Project
   createProject: (payload: CreateProjectPayload): Promise<ProjectRecord> =>
@@ -57,6 +72,10 @@ contextBridge.exposeInMainWorld("api", {
     on<AgentEvent>("agent:event", cb),
   onPreviewUpdated: (cb: (payload: PreviewUpdatedPayload) => void) =>
     on<PreviewUpdatedPayload>("preview:updated", cb),
+  onPreviewError: (cb: (payload: PreviewErrorPayload) => void) =>
+    on<PreviewErrorPayload>("preview:error", cb),
+  onPreviewMeshReady: (cb: (payload: PreviewMeshReadyPayload) => void) =>
+    on<PreviewMeshReadyPayload>("preview:mesh-ready", cb),
   onWorkspaceChanged: (cb: (payload: WorkspaceChangedPayload) => void) =>
     on<WorkspaceChangedPayload>("workspace:changed", cb),
 
