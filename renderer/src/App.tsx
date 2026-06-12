@@ -15,6 +15,7 @@ import { SourceViewer } from "./components/SourceViewer";
 import { Chat } from "./components/Chat";
 import { Settings } from "./components/Settings";
 import { NewProjectDialog } from "./components/NewProjectDialog";
+import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { IconButton } from "./components/ui";
 import { studioUrl } from "./lib/studio";
 import type { Project } from "./stores/project.store";
@@ -80,9 +81,12 @@ export function App() {
         className="h-9 flex items-center px-4 shrink-0 select-none gap-3"
         style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
       >
-        <span className="text-sm font-medium text-gray-400 ml-20">
-          OpenSCAD Studio
-        </span>
+        <div
+          className="ml-20"
+          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        >
+          <ProjectSwitcher />
+        </div>
         <div className="flex-1" />
         <div
           className="flex items-center gap-1"

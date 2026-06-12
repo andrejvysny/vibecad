@@ -12,6 +12,8 @@ import type {
   RevealPayload,
   CreateProjectPayload,
   GetProjectPayload,
+  DeleteProjectPayload,
+  RenameProjectPayload,
   ProjectRecord,
   PreviewUpdatedPayload,
   PreviewErrorPayload,
@@ -74,6 +76,10 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("project:list"),
   openProject: (payload: GetProjectPayload): Promise<ProjectRecord> =>
     ipcRenderer.invoke("project:open", payload),
+  renameProject: (payload: RenameProjectPayload): Promise<ProjectRecord> =>
+    ipcRenderer.invoke("project:rename", payload),
+  deleteProject: (payload: DeleteProjectPayload): Promise<{ id: string }> =>
+    ipcRenderer.invoke("project:delete", payload),
 
   // Push events from main
   onAgentEvent: (cb: (event: AgentEvent) => void) =>

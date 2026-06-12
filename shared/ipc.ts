@@ -54,6 +54,8 @@ export type ProjectRecord = {
   agentId: AgentId;
   modelingBackend: BackendId;
   outputNeed: "print" | "cad";
+  // Epoch ms — lets the renderer sort the switcher newest-first.
+  createdAt: number;
 };
 export type CreateProjectPayload = {
   name: string;
@@ -62,6 +64,8 @@ export type CreateProjectPayload = {
   outputNeed: "print" | "cad";
 };
 export type GetProjectPayload = { id: string };
+export type RenameProjectPayload = { id: string; name: string };
+export type DeleteProjectPayload = { id: string };
 
 // Main → Renderer (webContents.send / ipcRenderer.on)
 export type PreviewMeshReadyPayload = { projectId: string; stlPath: string };

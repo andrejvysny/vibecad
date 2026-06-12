@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { cpSync, mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { join, resolve } from "node:path";
+import { eq, inArray } from "drizzle-orm";
 import { initDb } from "./db/index.js";
-import { projects } from "./db/schema.js";
+import { exports, messages, models, projects, sessions } from "./db/schema.js";
 import { detectBackends } from "./modeling/index.js";
 import { getSkillsDir } from "./paths.js";
 import type { AgentId, BackendId } from "../../../shared/types.js";
@@ -76,4 +76,51 @@ export function getProject(id: string): ProjectRow | undefined {
     .where(eq(projects.id, id))
     .all();
   return row;
+}
+
+export function renameProject(id: string, name: string): ProjectRow {
+  const db = initDb();
+  db.update(projects)
+    .set({ name, updatedAt: new Date() })
+    .where(eq(projects.id, id))
+    .run();
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+  return row;
+}
+
+/** Cascade-delete a project's DB rows (FK-safe order) and remove its dir. */
+export function deleteProject(id: string): void {
+  const db = initDb();
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+
+  db.transaction((tx) => {
+    const sessIds = tx
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.projectId, id))
+      .all()
+      .map((s) => s.id);
+    const modelIds = tx
+      .select({ id: models.id })
+      .from(models)
+      .where(eq(models.projectId, id))
+      .all()
+      .map((m) => m.id);
+
+    if (sessIds.length)
+      tx.delete(messages).where(inArray(messages.sessionId, sessIds)).run();
+    if (modelIds.length)
+      tx.delete(exports).where(inArray(exports.modelId, modelIds)).run();
+    tx.delete(models).where(eq(models.projectId, id)).run();
+    tx.delete(sessions).where(eq(sessions.projectId, id)).run();
+    tx.delete(projects).where(eq(projects.id, id)).run();
+  });
+
+  // Remove the project folder — but only if it lives under the workspace root.
+  const root = resolve(getWorkspaceRoot());
+  if (resolve(row.dir).startsWith(root + "/")) {
+    rmSync(row.dir, { recursive: true, force: true });
+  }
 }

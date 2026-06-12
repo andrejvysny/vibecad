@@ -22,6 +22,7 @@ interface ProjectRecord {
   agentId: AgentId;
   modelingBackend: BackendId;
   outputNeed: "print" | "cad";
+  createdAt: number;
 }
 
 interface ChatMessageRecord {
@@ -79,6 +80,8 @@ interface ElectronAPI {
   }): Promise<ProjectRecord>;
   listProjects(): Promise<ProjectRecord[]>;
   openProject(payload: { id: string }): Promise<ProjectRecord>;
+  renameProject(payload: { id: string; name: string }): Promise<ProjectRecord>;
+  deleteProject(payload: { id: string }): Promise<{ id: string }>;
   // Push events (return unsubscribe fn)
   onAgentEvent(cb: (event: AgentEvent) => void): () => void;
   onPreviewMeshReady(

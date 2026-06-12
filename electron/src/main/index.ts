@@ -31,9 +31,11 @@ import { initDb } from "./db/index.js";
 import { projects } from "./db/schema.js";
 import {
   createProject,
+  deleteProject,
   getProject,
   getWorkspaceRoot,
   listProjects,
+  renameProject,
   type ProjectRow,
 } from "./projects.js";
 import {
@@ -55,6 +57,8 @@ import type {
   RevealPayload,
   CreateProjectPayload,
   GetProjectPayload,
+  DeleteProjectPayload,
+  RenameProjectPayload,
   ProjectRecord,
   ChatHistoryPayload,
   PickImagesPayload,
@@ -102,6 +106,7 @@ function toRecord(row: ProjectRow): ProjectRecord {
     agentId: row.agentId as ProjectRecord["agentId"],
     modelingBackend: row.modelingBackend,
     outputNeed: row.outputNeed,
+    createdAt: row.createdAt.getTime(),
   };
 }
 
@@ -573,6 +578,19 @@ ipcMain.handle("project:open", async (_e, payload: GetProjectPayload) => {
   if (!row) throw new Error(`Project not found: ${payload.id}`);
   await setActiveWatch(row.id, row.dir);
   return toRecord(row);
+});
+
+ipcMain.handle("project:rename", (_e, payload: RenameProjectPayload) => {
+  return toRecord(renameProject(payload.id, payload.name));
+});
+
+ipcMain.handle("project:delete", (_e, payload: DeleteProjectPayload) => {
+  if (watchedProjectId === payload.id) {
+    unwatchProject(payload.id);
+    watchedProjectId = null;
+  }
+  deleteProject(payload.id);
+  return { id: payload.id };
 });
 
 // ──── IPC: app ───────────────────────────────────────────────────────────────
