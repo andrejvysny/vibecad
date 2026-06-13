@@ -7,12 +7,39 @@ import {
 } from "../../stores/agent.store";
 import { useProjectStore } from "../../stores/project.store";
 import { useViewStore } from "../../stores/view.store";
+import {
+  useSelectionStore,
+  type Box,
+  type Pin,
+} from "../../stores/selection.store";
+import { captureAnnotation } from "../../lib/annotationBridge";
 import { studioUrl } from "../../lib/studio";
 import { cn } from "../../lib/cn";
 import { Chip, IconButton } from "../ui";
 import type { Project } from "../../stores/project.store";
 import { AGENT_MODELS, type AgentId } from "@shared/types";
-import type { TurnStatusPayload } from "@shared/ipc";
+import type { SelectionFeedback, TurnStatusPayload } from "@shared/ipc";
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** Convert the user's drawn marks into the structured agent payload. */
+function buildSelection(
+  pins: Pin[],
+  box: Box | null,
+): SelectionFeedback | undefined {
+  const points = pins.map((p) => ({
+    n: p.n,
+    x: round2(p.world[0]),
+    y: round2(p.world[1]),
+    z: round2(p.world[2]),
+    note: p.note,
+  }));
+  const region = box?.bbox
+    ? { min: box.bbox.min, max: box.bbox.max }
+    : undefined;
+  if (!points.length && !region) return undefined;
+  return { points, region };
+}
 
 interface Props {
   project: Project | null;
@@ -73,13 +100,30 @@ export function Chat({ project }: Props) {
     [project],
   );
 
-  function send(text: string) {
+  async function send(text: string) {
     if (!text.trim() || !project) return;
+    const sel = useSelectionStore.getState();
+    let atts = attachments;
+    let selection: SelectionFeedback | undefined;
+    if (sel.hasFeedback()) {
+      const dataBase64 = await captureAnnotation();
+      if (dataBase64) {
+        const path = await window.api.saveAttachment({
+          projectId: project.id,
+          name: "feedback.png",
+          dataBase64,
+        });
+        atts = [...atts, path];
+      }
+      selection = buildSelection(sel.pins, sel.box);
+      sel.clearAll();
+    }
     void run({
       prompt: text.trim(),
       projectId: project.id,
-      attachments,
+      attachments: atts,
       verify,
+      selection,
     });
     setPrompt("");
     setAttachments([]);
@@ -144,7 +188,7 @@ export function Chat({ project }: Props) {
             {QUICK_ACTIONS.map((a) => (
               <Chip
                 key={a.label}
-                onClick={() => send(a.prompt)}
+                onClick={() => void send(a.prompt)}
                 title={a.prompt}
               >
                 {a.label}
@@ -162,6 +206,7 @@ export function Chat({ project }: Props) {
               : "border-white/5 opacity-60",
           )}
         >
+          <PendingFeedback />
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 px-2.5 pt-2.5">
               {attachments.map((path) => (
@@ -196,7 +241,8 @@ export function Chat({ project }: Props) {
               if (files.length) void addImageFiles(files);
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send(prompt);
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+                void send(prompt);
             }}
           />
 
@@ -238,7 +284,7 @@ export function Chat({ project }: Props) {
               </button>
             ) : (
               <button
-                onClick={() => send(prompt)}
+                onClick={() => void send(prompt)}
                 disabled={!project || !prompt.trim()}
                 className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500 text-white text-xs font-medium hover:bg-blue-400 disabled:bg-white/10 disabled:text-gray-500 transition-colors"
               >
@@ -249,6 +295,34 @@ export function Chat({ project }: Props) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Compact indicator of model markup queued for the next message, with a clear
+// button. The annotated screenshot is what the agent actually sees; this is the
+// in-composer reminder that markup is attached.
+function PendingFeedback() {
+  const pins = useSelectionStore((s) => s.pins.length);
+  const hasBox = useSelectionStore((s) => s.box !== null);
+  const strokes = useSelectionStore((s) => s.strokes.length);
+  const clearAll = useSelectionStore((s) => s.clearAll);
+  if (!pins && !hasBox && !strokes) return null;
+  const parts = [
+    pins > 0 ? `📍 ${pins} pin${pins === 1 ? "" : "s"}` : null,
+    hasBox ? "▢ region" : null,
+    strokes > 0 ? "✎ marks" : null,
+  ].filter(Boolean);
+  return (
+    <div className="flex items-center gap-2 px-2.5 pt-2 text-[11px] text-amber-300/90">
+      <span>{parts.join(" · ")} — sent with your next message</span>
+      <button
+        onClick={clearAll}
+        title="Clear marks"
+        className="text-amber-300/60 hover:text-amber-200"
+      >
+        ×
+      </button>
     </div>
   );
 }

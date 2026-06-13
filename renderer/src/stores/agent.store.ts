@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { AgentEvent, DetectedAgent } from "@shared/types";
-import type { TurnStatusPayload } from "@shared/ipc";
+import type { SelectionFeedback, TurnStatusPayload } from "@shared/ipc";
 import { useProjectStore } from "./project.store";
 import { latestModelBase } from "./preview";
 
@@ -66,6 +66,8 @@ interface RunPayload {
   attachments?: string[];
   // Force a vision-in-the-loop check this turn (composer "Verify" toggle).
   verify?: boolean;
+  // Pins/region the user marked on the 3D model this turn.
+  selection?: SelectionFeedback;
 }
 
 interface AgentStore {
@@ -147,7 +149,7 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       set({ detected: agents, activeAgentId: active?.id ?? null });
     },
 
-    async run({ prompt, projectId, attachments, verify }) {
+    async run({ prompt, projectId, attachments, verify, selection }) {
       const userMsg: ChatMessage = {
         id: uid(),
         role: "user",
@@ -169,7 +171,13 @@ export const useAgentStore = create<AgentStore>((set, get) => {
         messages: [...s.messages, userMsg, assistantMsg],
       }));
       try {
-        await window.api.runAgent({ prompt, projectId, attachments, verify });
+        await window.api.runAgent({
+          prompt,
+          projectId,
+          attachments,
+          verify,
+          selection,
+        });
       } catch (err) {
         get().pushEvent({
           type: "error",

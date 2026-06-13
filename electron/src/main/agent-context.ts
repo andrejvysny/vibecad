@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { SelectionFeedback } from "../../../shared/ipc.js";
 
 export interface AgentContext {
   /** Assembled markdown injected per-agent (system prompt or prompt prefix). */
@@ -15,6 +16,42 @@ interface BuildOpts {
   bundledSkillDir: string;
   /** Absolute image paths the user attached to this turn. */
   attachments?: string[];
+  /** Pins/region the user marked on the 3D model this turn (model-space mm). */
+  selection?: SelectionFeedback;
+}
+
+/**
+ * Render a user's 3D markup as a markdown block the agent can act on. Pure (no
+ * I/O) so it's unit-testable. Returns null when there's nothing to say. Pins are
+ * numbered to match the badges baked into the attached annotated screenshot.
+ */
+export function formatSelectionFeedback(
+  selection: SelectionFeedback,
+): string | null {
+  const lines: string[] = [];
+  for (const p of selection.points) {
+    const coord = `(${p.x}, ${p.y}, ${p.z})`;
+    lines.push(
+      `- ${p.n}. ${coord}${p.note.trim() ? ` — ${p.note.trim()}` : ""}`,
+    );
+  }
+  const parts: string[] = [];
+  if (lines.length) {
+    parts.push(`Marked points (model coordinates, mm):\n${lines.join("\n")}`);
+  }
+  if (selection.region) {
+    const { min, max } = selection.region;
+    parts.push(
+      `Region of interest (bounding box, mm): min (${min.join(", ")}) → max (${max.join(", ")}).`,
+    );
+  }
+  if (!parts.length) return null;
+  parts.push(
+    "The user marked these on the 3D view to point you at what to change. " +
+      "An annotated screenshot is attached above (numbered pins match the points). " +
+      "Focus your edits on these locations.",
+  );
+  return `## Manual feedback — user-selected regions\n\n${parts.join("\n\n")}`;
 }
 
 async function readIfPresent(path: string): Promise<string | null> {
@@ -87,6 +124,12 @@ export async function buildAgentContext(
   if (opts.attachments?.length) {
     const list = opts.attachments.map((p) => `- ${p}`).join("\n");
     sections.push(`## Attached image(s) for reference (read them)\n\n${list}`);
+  }
+
+  // 6. Manual 3D feedback — pins/region the user marked this turn.
+  if (opts.selection) {
+    const block = formatSelectionFeedback(opts.selection);
+    if (block) sections.push(block);
   }
 
   return { preamble: sections.join("\n\n---\n\n"), contextDirs };

@@ -28,6 +28,11 @@ interface SetParamResult {
   errors: string[];
 }
 
+interface SelectionFeedback {
+  points: { n: number; x: number; y: number; z: number; note: string }[];
+  region?: { min: [number, number, number]; max: [number, number, number] };
+}
+
 interface ProjectRecord {
   id: string;
   name: string;
@@ -72,6 +77,7 @@ interface ElectronAPI {
     sessionId?: string;
     attachments?: string[];
     verify?: boolean;
+    selection?: SelectionFeedback;
   }): Promise<void>;
   stopAgent(payload: { projectId: string }): Promise<void>;
   chatHistory(payload: { projectId: string }): Promise<ChatMessageRecord[]>;

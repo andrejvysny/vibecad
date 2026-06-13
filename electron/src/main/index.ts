@@ -252,6 +252,7 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     payload.prompt,
     payload.attachments,
     payload.verify ?? false,
+    payload.selection,
   );
 });
 

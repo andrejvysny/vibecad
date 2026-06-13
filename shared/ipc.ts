@@ -20,6 +20,15 @@ export type RunAgentPayload = {
   attachments?: string[];
   // Composer "Verify" toggle (Phase 3): force a vision-in-the-loop pass.
   verify?: boolean;
+  // Manual feedback the user drew on the 3D model this turn (pins / region).
+  // Coords are in model space (mm). The annotated screenshot rides in `attachments`.
+  selection?: SelectionFeedback;
+};
+// User-placed pins and an optional region-of-interest box, captured from the
+// 3D viewer. Injected into the agent preamble as a "Manual feedback" section.
+export type SelectionFeedback = {
+  points: { n: number; x: number; y: number; z: number; note: string }[];
+  region?: { min: [number, number, number]; max: [number, number, number] };
 };
 export type ChatHistoryPayload = { projectId: string };
 // `kind` distinguishes a user's own message ("chat") from app-injected

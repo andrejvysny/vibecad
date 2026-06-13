@@ -76,6 +76,10 @@ export class Viewer {
   private key!: THREE.DirectionalLight;
 
   private mesh: THREE.Mesh | null = null;
+  // Offset baked into the mesh geometry (original bbox center). Pins are stored
+  // in original model space, so pick/project apply this offset to convert.
+  private modelCenter = new THREE.Vector3();
+  private raycaster = new THREE.Raycaster();
   private edges: THREE.LineSegments | null = null;
   // True B-rep edge segments (already centered), when supplied by a STEP load;
   // null ⇒ infer edges from the mesh via EdgesGeometry.
@@ -133,6 +137,8 @@ export class Viewer {
     this.renderer = new THREE.WebGLRenderer({
       antialias: false,
       powerPreference: "high-performance",
+      // Needed so captureCanvas() can read pixels back for annotated screenshots.
+      preserveDrawingBuffer: true,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
@@ -402,6 +408,7 @@ export class Viewer {
     shaded.computeBoundingBox();
     const box = shaded.boundingBox ?? new THREE.Box3();
     const center = box.getCenter(new THREE.Vector3());
+    this.modelCenter.copy(center);
     const size = box.getSize(new THREE.Vector3());
     const position = shaded.getAttribute("position");
     this.triangleCount = position ? Math.floor(position.count / 3) : 0;
@@ -586,6 +593,54 @@ export class Viewer {
 
   getGridCell(): number {
     return this.gridCell;
+  }
+
+  // ── Annotation helpers (manual 3D feedback) ────────────────────────────────
+
+  getModelCenter(): THREE.Vector3 {
+    return this.modelCenter.clone();
+  }
+
+  /** Raycast a viewport pixel against the mesh; returns the hit point in
+   *  original model space (mm), or null if the ray missed / no mesh. */
+  pickPoint(
+    clientX: number,
+    clientY: number,
+  ): { world: [number, number, number] } | null {
+    if (!this.mesh) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hit = this.raycaster.intersectObject(this.mesh, false)[0];
+    if (!hit) return null;
+    const w = hit.point.add(this.modelCenter);
+    return { world: [w.x, w.y, w.z] };
+  }
+
+  /** Project a model-space point to canvas CSS pixels (overlay coordinates). */
+  project(world: [number, number, number]): {
+    x: number;
+    y: number;
+    visible: boolean;
+  } {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const v = new THREE.Vector3(world[0], world[1], world[2])
+      .sub(this.modelCenter)
+      .project(this.camera);
+    return {
+      x: ((v.x + 1) / 2) * rect.width,
+      y: ((1 - v.y) / 2) * rect.height,
+      visible: v.z < 1,
+    };
+  }
+
+  /** Render the scene once and read the canvas back as a PNG data URL. */
+  captureCanvas(): string {
+    this.composer.render();
+    return this.renderer.domElement.toDataURL("image/png");
   }
 
   clear(): void {

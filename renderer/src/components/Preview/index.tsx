@@ -10,7 +10,12 @@ import { studioUrl } from "../../lib/studio";
 import { loadStepGeometry, StepViewerInitError } from "../../lib/loadStep";
 import { ActionButton, Divider, ToolbarButton } from "../ui";
 import { ParamPanel } from "./ParamPanel";
+import { AnnotationOverlay } from "./AnnotationOverlay";
 import { Viewer } from "./viewer";
+import {
+  useSelectionStore,
+  type AnnotTool,
+} from "../../stores/selection.store";
 import type { Project } from "../../stores/project.store";
 import type { CameraPreset, ExportFormat } from "@shared/types";
 import type {
@@ -70,6 +75,9 @@ interface Props {
 export function Preview({ project }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  // Mirror the viewer into state so the annotation overlay re-renders once it
+  // exists (the ref alone isn't reactive).
+  const [viewer, setViewer] = useState<Viewer | null>(null);
   const [rendering, setRendering] = useState(false);
   const [converting, setConverting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,19 +118,26 @@ export function Preview({ project }: Props) {
   useEffect(() => {
     if (!mountRef.current) return;
     const initial = useViewportStore.getState();
-    const viewer = new Viewer(mountRef.current, {
+    const v = new Viewer(mountRef.current, {
       quality: initial.quality,
       controlPreset: initial.controlPreset,
       projection: initial.projection,
       materialPreset: initial.materialPreset,
       aoEnabled: initial.aoEnabled,
     });
-    viewerRef.current = viewer;
+    viewerRef.current = v;
+    setViewer(v);
     return () => {
-      viewer.dispose();
+      v.dispose();
       viewerRef.current = null;
+      setViewer(null);
     };
   }, []);
+
+  // Reset annotations whenever the active model changes (pins are model-bound).
+  useEffect(() => {
+    useSelectionStore.getState().bindModel(project?.activeModel ?? null);
+  }, [project?.activeModel]);
 
   useEffect(() => {
     viewerRef.current?.setSettings({
@@ -369,6 +384,9 @@ export function Preview({ project }: Props) {
       <div className="flex-1 relative bg-[#0a0d12] overflow-hidden">
         <div ref={mountRef} className="absolute inset-0" />
 
+        {!empty && <AnnotationOverlay viewer={viewer} />}
+        {!empty && <AnnotationPalette />}
+
         {project && <ParamPanel project={project} />}
 
         {/* Dimension / scale HUD */}
@@ -425,6 +443,47 @@ export function Preview({ project }: Props) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Floating tool palette over the viewport: pick the active annotation tool and
+// clear marks. Pins/box/strokes themselves render in <AnnotationOverlay>.
+const TOOLS: { value: AnnotTool; label: string; title: string }[] = [
+  { value: "orbit", label: "↻", title: "Orbit / inspect (no markup)" },
+  { value: "pin", label: "📍", title: "Drop a pin on the model" },
+  { value: "box", label: "▢", title: "Box a region of interest" },
+  { value: "draw", label: "✎", title: "Freehand draw on the view" },
+];
+
+function AnnotationPalette() {
+  const tool = useSelectionStore((s) => s.tool);
+  const setTool = useSelectionStore((s) => s.setTool);
+  const clearAll = useSelectionStore((s) => s.clearAll);
+  const hasFeedback = useSelectionStore((s) => s.hasFeedback());
+
+  return (
+    <div className="absolute top-1/2 right-3 -translate-y-1/2 flex flex-col gap-0.5 rounded-md border border-white/10 bg-[#161a22]/90 p-1 shadow-xl">
+      {TOOLS.map((t) => (
+        <ToolbarButton
+          key={t.value}
+          active={tool === t.value}
+          onClick={() => setTool(t.value)}
+          title={t.title}
+          className="w-7 px-0 text-center"
+        >
+          {t.label}
+        </ToolbarButton>
+      ))}
+      {hasFeedback && (
+        <button
+          onClick={clearAll}
+          title="Clear all marks"
+          className="w-7 mt-0.5 rounded text-center text-xs text-gray-500 hover:text-red-400 hover:bg-white/5"
+        >
+          🗑
+        </button>
+      )}
     </div>
   );
 }

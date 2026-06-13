@@ -33,6 +33,7 @@ import {
   ESCALATION_MODELS,
 } from "../../../shared/types.js";
 import type {
+  SelectionFeedback,
   TurnStatusPayload,
   WorkflowStepPayload,
 } from "../../../shared/ipc.js";
@@ -79,6 +80,7 @@ export async function runAgentTurn(
   prompt: string,
   attachments?: string[],
   verify = false,
+  selection?: SelectionFeedback,
 ): Promise<{ stalled: boolean }> {
   const db = initDb();
   const [project] = db
@@ -104,6 +106,7 @@ export async function runAgentTurn(
   const { preamble, contextDirs } = await buildAgentContext(project, {
     bundledSkillDir: getSkillsDir(project.modelingBackend),
     attachments,
+    selection,
   });
 
   const session = getOrCreateSession(projectId, project.agentId);
