@@ -1,8 +1,9 @@
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import log from "electron-log/main";
 import { getBackend } from "./modeling/index.js";
 import { getProject, type ProjectRow } from "./projects.js";
+import { isMeshStale } from "./preview-util.js";
 import { sendToRenderer } from "./window.js";
 import type { CameraPreset, ModelingBackend } from "../../../shared/types.js";
 
@@ -56,6 +57,34 @@ export async function produceMesh(
     return { meshPath: path, stderr };
   }
   return { meshPath: await backend.export(modelPath, "stl"), stderr: "" };
+}
+
+/**
+ * Export the standalone preview mesh for every part whose mesh is missing or
+ * stale. Parts are independent models, so each previews on its own — this keeps
+ * `parts/<name>.{stl,step}` fresh after a turn (the fs watcher then surfaces them
+ * to the renderer). Best-effort and token-free: a part that's broken in isolation
+ * just gets skipped (logged), never failing the turn. No IPC push — the workspace
+ * watcher refreshes the file list.
+ */
+export async function exportPartMeshes(
+  project: ProjectRow,
+  backend: ModelingBackend,
+): Promise<void> {
+  const sourceExt = project.modelingBackend === "openscad" ? ".scad" : ".py";
+  const meshExt = project.modelingBackend === "build123d" ? ".step" : ".stl";
+  for (const src of await listPartSources(project)) {
+    try {
+      const meshPath = src.replace(new RegExp(`\\${sourceExt}$`), meshExt);
+      const srcMtime = (await stat(src)).mtimeMs;
+      const meshMtime = await stat(meshPath)
+        .then((s) => s.mtimeMs)
+        .catch(() => null);
+      if (isMeshStale(srcMtime, meshMtime)) await produceMesh(backend, src);
+    } catch (err) {
+      log.warn(`[preview] part mesh export failed for ${src}:`, err);
+    }
+  }
 }
 
 /**

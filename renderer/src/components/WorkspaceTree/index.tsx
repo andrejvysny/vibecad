@@ -121,12 +121,12 @@ function PartRow({
   const toggleScope = useProjectStore((s) => s.toggleEditScope);
   const scoped = !!group.source && editScope.includes(group.source);
   const name = group.key.replace(/^parts\//, "");
-  const hasMesh = group.exports.some((f) => DISPLAYABLE.has(ext(f)));
 
+  // Always open the part in 3D — the viewport lazily exports its mesh if none
+  // exists yet. The source stays reachable via the expanded row's source leaf.
   function inspect() {
     useProjectStore.getState().setActiveModel(project.id, group.key);
-    if (hasMesh) useViewStore.getState().show3d();
-    else if (group.source) useViewStore.getState().showSource(group.source);
+    useViewStore.getState().show3d();
   }
 
   async function remove() {

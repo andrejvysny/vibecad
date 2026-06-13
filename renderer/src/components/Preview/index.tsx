@@ -81,6 +81,8 @@ export function Preview({ project }: Props) {
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [rendering, setRendering] = useState(false);
   const [converting, setConverting] = useState(false);
+  // True while lazily exporting a part's mesh the first time it's viewed.
+  const [partExporting, setPartExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [empty, setEmpty] = useState(true);
   const [showEdges, setShowEdges] = useState(true);
@@ -95,6 +97,9 @@ export function Preview({ project }: Props) {
   // Track which model the viewer currently holds, so a re-render of the SAME
   // model (param tweak / Re-render) preserves the camera instead of re-framing.
   const loadedPathRef = useRef<string | null>(null);
+  // The part source path we last asked main to export, so the lazy effect fires
+  // once per part (not on every render while the mesh is still being written).
+  const lazyReqRef = useRef<string | null>(null);
 
   const backends = useBackendStore((s) => s.detected);
   const backend = backends.find((b) => b.id === project?.modelingBackend);
@@ -150,6 +155,29 @@ export function Preview({ project }: Props) {
   useEffect(() => {
     viewerRef.current?.setHighlight(!!isolatedPart);
   }, [isolatedPart, meshPath, meshVersion]);
+
+  // Reset the lazy-export guard whenever the active target changes, so
+  // re-selecting a part retries its export (e.g. after a fixed error).
+  useEffect(() => {
+    lazyReqRef.current = null;
+  }, [activeKey]);
+
+  // Lazy-export a part's mesh the first time it's viewed with none on disk. The
+  // export pushes preview:mesh-ready and the fs watcher adds the file, so the
+  // load effect below renders it. Guarded to fire once per part path.
+  useEffect(() => {
+    if (!project || !isolatedPart || meshPath || !activeKey) return;
+    const sourceExt = project.modelingBackend === "openscad" ? "scad" : "py";
+    const src = `${project.dir}/${activeKey}.${sourceExt}`;
+    if (lazyReqRef.current === src) return;
+    lazyReqRef.current = src;
+    setPartExporting(true);
+    setError(null);
+    window.api
+      .previewMesh({ projectId: project.id, modelPath: src })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setPartExporting(false));
+  }, [project, isolatedPart, meshPath, activeKey]);
 
   useEffect(() => {
     viewerRef.current?.setSettings({
@@ -244,7 +272,13 @@ export function Preview({ project }: Props) {
     setRendering(true);
     setError(null);
     try {
-      await window.api.previewMesh({ projectId: project.id });
+      // Re-export the model currently in view (the active part, the assembly, or
+      // a legacy entry) — not always the assembly.
+      const sourceExt = project.modelingBackend === "openscad" ? "scad" : "py";
+      const modelPath = project.activeModel
+        ? `${project.dir}/${project.activeModel}.${sourceExt}`
+        : undefined;
+      await window.api.previewMesh({ projectId: project.id, modelPath });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -266,7 +300,7 @@ export function Preview({ project }: Props) {
     }
   }
 
-  const busy = rendering || agentRunning || converting;
+  const busy = rendering || agentRunning || converting || partExporting;
 
   return (
     <div className="flex flex-col h-full">
@@ -437,11 +471,13 @@ export function Preview({ project }: Props) {
         {busy && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-2.5 py-1 rounded-full bg-black/50 border border-white/10 text-xs text-gray-300">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            {rendering
-              ? "Rendering…"
-              : converting
-                ? "Converting STEP…"
-                : "Working…"}
+            {partExporting
+              ? "Rendering part…"
+              : rendering
+                ? "Rendering…"
+                : converting
+                  ? "Converting STEP…"
+                  : "Working…"}
           </div>
         )}
 
@@ -465,9 +501,13 @@ export function Preview({ project }: Props) {
                   ? ` (missing: ${backend.missing.join(", ")})`
                   : ""}
               </p>
-            ) : (
+            ) : partExporting ? null : ( // busy pill shows "Rendering part…"
               <p className="text-gray-600 text-sm">
-                {project ? "No model yet" : "Open or create a project"}
+                {project
+                  ? isolatedPart
+                    ? "Part has no geometry yet"
+                    : "No model yet"
+                  : "Open or create a project"}
               </p>
             )}
           </div>

@@ -69,6 +69,10 @@ reason about and edit in isolation:
 
   (`parts/` is on `sys.path`, so `from parts.<name> import …` just works — no `__init__.py`.)
 
+- **Shared helpers.** Prefer the bundled `from helpers import …`. If you need your own shared
+  code, put it in a module at the **project root** (e.g. `studio_helpers.py`) and
+  `from studio_helpers import …` — the root is on `sys.path` for both `assembly.py` **and**
+  every `parts/<name>.py`, so each part still loads standalone.
 - **Edit in place.** Editing a part automatically updates the composed preview; you do not
   re-create the assembly unless the _composition_ changes.
 - **Edit scope.** When a turn says to modify only certain parts, change **only those files**

@@ -38,6 +38,11 @@ def load_result(model_path: str):
     # the model's own sibling modules.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     sys.path.insert(0, str(path.parent))
+    # A part lives in `<project>/parts/`; also expose the project root so a part
+    # can import project-level helpers and `from parts.<name> import …`, exactly
+    # as the assembly (which sits at the root) already can.
+    if path.parent.name == "parts":
+        sys.path.insert(0, str(path.parent.parent))
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     if not hasattr(mod, "result"):
         sys.exit(f"Model has no top-level `result` solid: {model_path}")

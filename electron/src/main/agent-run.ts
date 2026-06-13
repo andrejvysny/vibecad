@@ -15,7 +15,12 @@ import {
 import { getSkillsDir } from "./paths.js";
 import { buildAgentContext } from "./agent-context.js";
 import { getWorkflow } from "./workflows.js";
-import { latestModel, listPartSources, renderSnapshots } from "./preview.js";
+import {
+  exportPartMeshes,
+  latestModel,
+  listPartSources,
+  renderSnapshots,
+} from "./preview.js";
 import { runGateChain } from "./repair/gates.js";
 import { decideNextAction } from "./repair/policy.js";
 import {
@@ -216,6 +221,9 @@ async function runTurnPipeline(
         }
         if (partChanged) continue; // a part edit re-enters the gate chain
       }
+      // Refresh standalone part meshes (missing/stale only) so each part can be
+      // previewed on its own. Token-free, best-effort — never blocks the turn.
+      await exportPartMeshes(project, backend);
       sendStatus({ projectId, phase: "ok" });
       return { stalled: false };
     }
