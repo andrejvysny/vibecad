@@ -44,6 +44,23 @@ interface ChatMessageRecord {
   role: "user" | "assistant" | "tool";
   content: string;
   eventsJson?: string;
+  kind?: "chat" | "repair" | "vision";
+}
+
+interface TurnStatusPayload {
+  projectId: string;
+  phase:
+    | "validating"
+    | "rendering"
+    | "repairing"
+    | "escalating"
+    | "vision"
+    | "ok"
+    | "failed";
+  attempt?: number;
+  maxAttempts?: number;
+  gate?: "validate" | "export" | "diagnostics" | "vision";
+  message?: string;
 }
 
 interface ElectronAPI {
@@ -54,6 +71,7 @@ interface ElectronAPI {
     projectId: string;
     sessionId?: string;
     attachments?: string[];
+    verify?: boolean;
   }): Promise<void>;
   stopAgent(payload: { projectId: string }): Promise<void>;
   chatHistory(payload: { projectId: string }): Promise<ChatMessageRecord[]>;
@@ -144,6 +162,14 @@ interface ElectronAPI {
   onWorkspaceChanged(
     cb: (p: { projectId: string; files: string[] }) => void,
   ): () => void;
+  onPreviewUpdated(
+    cb: (p: {
+      projectId: string;
+      angle: "front" | "top" | "iso";
+      pngPath: string;
+    }) => void,
+  ): () => void;
+  onTurnStatus(cb: (p: TurnStatusPayload) => void): () => void;
   onWorkflowStep(cb: (p: WorkflowStepPayload) => void): () => void;
   // App
   getVersions(): Promise<Record<string, string>>;

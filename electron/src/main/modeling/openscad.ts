@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { cleanSpawnEnv } from "../spawn-env.js";
 import { resolveOpenscad } from "./resolve-openscad.js";
+import { classify, parseComment, sectionOf } from "./param-comments.js";
 import type {
   BackendStatus,
   CameraPreset,
@@ -14,11 +15,13 @@ import type {
   ValidationResult,
 } from "../../../../shared/types.js";
 
-// openscad --camera=translateX,Y,Z,rotX,Y,Z,dist
+// openscad --camera=transX,Y,Z,rotX,Y,Z,dist. Distance is 0 here because
+// --viewall --autocenter auto-fit the model to the frame at any scale (the old
+// fixed dist=200 clipped large models and mis-labelled "front" as a top view).
 const CAMERA_ARGS: Record<CameraPreset, string> = {
-  front: "0,0,0,0,0,0,200",
-  top: "0,0,0,90,0,0,200",
-  iso: "0,0,0,45,0,45,200",
+  front: "0,0,0,90,0,0,0",
+  top: "0,0,0,0,0,0,0",
+  iso: "0,0,0,55,0,25,0",
 };
 
 function spawnAsync(
@@ -52,51 +55,23 @@ async function bin(): Promise<string> {
   return path;
 }
 
+/** Export to `format`, returning the output path AND stderr (kept even on exit 0,
+ *  where CGAL/2-manifold advisories live — the diagnostics gate parses them). */
+async function exportScad(
+  modelPath: string,
+  format: ExportFormat,
+): Promise<{ path: string; stderr: string }> {
+  const osc = await bin();
+  const out = modelPath.replace(".scad", `.${format}`);
+  const { code, stderr } = await spawnAsync(osc, [modelPath, "-o", out]);
+  if (code !== 0) {
+    throw new Error(stderr.trim() || `${osc} exited with code ${code}`);
+  }
+  return { path: out, stderr };
+}
+
 function count(s: string, c: string): number {
   return s.split(c).length - 1;
-}
-
-/** Classify a raw RHS value into a parameter type + parsed value. */
-function classify(raw: string): { type: Param["type"]; value: Param["value"] } {
-  if (raw === "true" || raw === "false") {
-    return { type: "boolean", value: raw === "true" };
-  }
-  if (/^-?\d+$/.test(raw)) return { type: "integer", value: parseInt(raw, 10) };
-  if (/^-?\d*\.?\d+$/.test(raw)) {
-    return { type: "number", value: parseFloat(raw) };
-  }
-  if (raw.startsWith('"') && raw.endsWith('"')) {
-    return { type: "string", value: raw.slice(1, -1) };
-  }
-  if (raw.startsWith("[")) return { type: "array", value: raw };
-  return { type: "expression", value: raw };
-}
-
-/** Parse a Customizer comment (`[min:max] desc`, `[a,b] desc`, or `desc`). */
-function parseComment(comment: string, p: Param): void {
-  if (!comment) return;
-  const m = /^\[([^\]]+)\]\s*(.*)$/.exec(comment);
-  if (!m) {
-    p.description = comment;
-    return;
-  }
-  const bracket = (m[1] ?? "").trim();
-  const desc = (m[2] ?? "").trim();
-  if (desc) p.description = desc;
-
-  if (bracket.includes(":") && !bracket.includes(",")) {
-    const parts = bracket.split(":").map((s) => parseFloat(s.trim()));
-    if (parts.length === 2) {
-      [p.min, p.max] = parts as [number, number];
-    } else if (parts.length === 3) {
-      [p.min, p.step, p.max] = parts as [number, number, number];
-    }
-  } else {
-    p.options = bracket
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
 }
 
 export const openscadBackend: ModelingBackend = {
@@ -131,6 +106,9 @@ export const openscadBackend: ModelingBackend = {
         png,
         `--camera=${CAMERA_ARGS[cam]}`,
         `--imgsize=${size[0]},${size[1]}`,
+        "--viewall",
+        "--autocenter",
+        "--projection=perspective",
       ]);
       out.push(png);
     }
@@ -138,10 +116,11 @@ export const openscadBackend: ModelingBackend = {
   },
 
   async export(modelPath: string, format: ExportFormat): Promise<string> {
-    const osc = await bin();
-    const out = modelPath.replace(".scad", `.${format}`);
-    await run(osc, [modelPath, "-o", out]);
-    return out;
+    return (await exportScad(modelPath, format)).path;
+  },
+
+  exportWithLog(modelPath: string, format: ExportFormat) {
+    return exportScad(modelPath, format);
   },
 
   async validate(modelPath: string): Promise<ValidationResult> {
@@ -165,15 +144,22 @@ export const openscadBackend: ModelingBackend = {
     // name = value;  // [range/options] description
     const assign = /^\s*([A-Za-z_]\w*)\s*=\s*([^;]+);\s*(?:\/\/\s*(.*))?$/;
     let depth = 0;
+    let section: string | undefined;
     source.split("\n").forEach((line, i) => {
       const before = depth;
       depth += count(line, "{") - count(line, "}");
       if (before > 0) return; // skip vars inside modules/functions
+      const sec = sectionOf(line);
+      if (sec !== null) {
+        section = sec;
+        return;
+      }
       const m = assign.exec(line);
       if (!m) return;
       const { type, value } = classify((m[2] ?? "").trim());
       const param: Param = { name: m[1] ?? "", value, type, line: i };
       parseComment((m[3] ?? "").trim(), param);
+      if (section) param.section = section;
       params.push(param);
     });
     return params;

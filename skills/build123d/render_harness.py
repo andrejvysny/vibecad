@@ -5,19 +5,23 @@ Usage:
   python render_harness.py <model.py> --camera <front|top|iso> --out <png> [--size WxH]
   python render_harness.py <model.py> --export <stl|3mf|step|dxf> --out <path>
   python render_harness.py <model.py> --check
+  python render_harness.py <model.py> --diagnostics   # JSON B-rep report to stdout
 
 Contract: the model assigns its final solid to a top-level variable `result`.
 """
 import argparse
 import importlib.util
+import json
 import sys
 import tempfile
 from pathlib import Path
 
-CAMERA_PRESETS = {
-    "front": {"position": (200, 0, 0), "look_at": (0, 0, 0)},
-    "top":   {"position": (0, 0, 200), "look_at": (0, 0, 0)},
-    "iso":   {"position": (140, 140, 140), "look_at": (0, 0, 0)},
+# f3d auto-fits the model to the frame; we only set the viewing direction so any
+# model scale frames correctly (the old fixed positions clipped large parts).
+CAMERA_DIRECTIONS = {
+    "front": "-1,0,0",
+    "top":   "0,0,-1",
+    "iso":   "-1,-1,-1",
 }
 
 
@@ -27,6 +31,9 @@ def load_result(model_path: str):
     if spec is None or spec.loader is None:
         sys.exit(f"Cannot load {model_path}")
     mod = importlib.util.module_from_spec(spec)
+    # Resolve `from helpers import ...` (helpers.py sits beside this harness) and
+    # the model's own sibling modules.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     sys.path.insert(0, str(path.parent))
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     if not hasattr(mod, "result"):
@@ -36,8 +43,8 @@ def load_result(model_path: str):
 
 def render_png(result, camera: str, out_path: str, size: str) -> None:
     w, h = (int(x) for x in size.split("x"))
-    preset = CAMERA_PRESETS.get(camera)
-    if preset is None:
+    direction = CAMERA_DIRECTIONS.get(camera)
+    if direction is None:
         sys.exit(f"Unknown camera preset: {camera}. Use front, top, or iso.")
 
     # Export to a temp STEP file then render with f3d
@@ -50,19 +57,15 @@ def render_png(result, camera: str, out_path: str, size: str) -> None:
     except Exception as exc:
         sys.exit(f"STEP export failed: {exc}")
 
-    # Try f3d (preferred) then fall back with an error
+    # f3d auto-frames the bounds; we just orient via --camera-direction.
     import subprocess
-    pos = preset["position"]
-    look = preset["look_at"]
-    camera_str = f"{pos[0]},{pos[1]},{pos[2]},{look[0]},{look[1]},{look[2]},0,0,1"
     result_proc = subprocess.run(
         [
             "f3d",
             tmp_path,
             "--output", out_path,
             "--resolution", f"{w},{h}",
-            "--camera-position", f"{pos[0]},{pos[1]},{pos[2]}",
-            "--camera-focal-point", f"{look[0]},{look[1]},{look[2]}",
+            f"--camera-direction={direction}",
             "--no-background",
             "--quiet",
         ],
@@ -98,6 +101,21 @@ def do_export(result, fmt: str, out_path: str) -> None:
         sys.exit(f"Unknown export format: {fmt}")
 
 
+def diagnostics(result) -> dict:
+    """Deterministic B-rep report (OCCT BRepCheck via is_valid). JSON to stdout."""
+    bb = result.bounding_box()
+    return {
+        "valid": bool(result.is_valid()),
+        "volume": float(result.volume),
+        "bbox": {
+            "min": [bb.min.X, bb.min.Y, bb.min.Z],
+            "max": [bb.max.X, bb.max.Y, bb.max.Z],
+        },
+        "solids": len(result.solids()),
+        "shells": len(result.shells()),
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="build123d render/export harness")
     ap.add_argument("model", help="Path to model .py file")
@@ -106,12 +124,20 @@ def main() -> None:
     ap.add_argument("--out", metavar="PATH", help="Output file path")
     ap.add_argument("--size", default="800x600", help="Image size WxH (default 800x600)")
     ap.add_argument("--check", action="store_true", help="Validate model only (no output)")
+    ap.add_argument("--diagnostics", action="store_true", help="Emit a JSON B-rep report")
     args = ap.parse_args()
 
     result = load_result(args.model)
 
     if args.check:
         print(f"OK: {args.model} — result solid loaded successfully")
+        return
+
+    if args.diagnostics:
+        try:
+            print(json.dumps(diagnostics(result)))
+        except Exception as exc:  # degrade gracefully — caller treats as skipped
+            sys.exit(f"diagnostics failed: {exc}")
         return
 
     if not args.out:

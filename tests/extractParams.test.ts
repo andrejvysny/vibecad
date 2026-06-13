@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openscadBackend } from "../electron/src/main/modeling/openscad";
+import { build123dBackend } from "../electron/src/main/modeling/build123d";
 
 describe("openscadBackend.extractParams", () => {
   it("extracts top-level numeric assignments with type + line numbers", async () => {
@@ -35,7 +36,8 @@ describe("openscadBackend.extractParams", () => {
       line: 0,
       min: 20,
       max: 100,
-      description: "Width in mm",
+      description: "Width",
+      unit: "mm",
     });
     expect(params[1]).toEqual({
       name: "wall",
@@ -81,5 +83,79 @@ describe("openscadBackend.extractParams", () => {
     ].join("\n");
     const params = await openscadBackend.extractParams(src);
     expect(params.map((p) => p.name)).toEqual(["top", "bottom"]);
+  });
+
+  it("groups params under `// === Section ===` headings", async () => {
+    const src = [
+      "// === Dimensions ===",
+      "width = 10;",
+      "// === Holes ===",
+      "hole = 3;",
+    ].join("\n");
+    const params = await openscadBackend.extractParams(src);
+    expect(params.map((p) => [p.name, p.section])).toEqual([
+      ["width", "Dimensions"],
+      ["hole", "Holes"],
+    ]);
+  });
+});
+
+describe("build123dBackend.extractParams", () => {
+  it("parses # PARAM annotations: ranges, options, booleans, strings, unit", async () => {
+    const src = [
+      "width = 60.0     # PARAM [20:200] Width in mm",
+      "height = 30      # PARAM [10:100] Height",
+      'style = "round"  # PARAM [round, square] Corner style',
+      "rounded = True   # PARAM Add rounded corners",
+      "depth = 5.0",
+    ].join("\n");
+    const params = await build123dBackend.extractParams(src);
+    expect(params[0]).toEqual({
+      name: "width",
+      value: 60,
+      type: "number",
+      line: 0,
+      min: 20,
+      max: 200,
+      description: "Width",
+      unit: "mm",
+    });
+    expect(params[1]).toMatchObject({
+      name: "height",
+      value: 30,
+      type: "integer",
+      min: 10,
+      max: 100,
+      description: "Height",
+    });
+    expect(params[2]).toMatchObject({
+      name: "style",
+      value: "round",
+      type: "string",
+      options: ["round", "square"],
+      description: "Corner style",
+    });
+    expect(params[3]).toMatchObject({
+      name: "rounded",
+      value: true,
+      type: "boolean",
+      description: "Add rounded corners",
+    });
+    expect(params[4]).toMatchObject({
+      name: "depth",
+      value: 5,
+      type: "number",
+    });
+  });
+
+  it("ignores indented (non-top-level) assignments and expressions", async () => {
+    const src = [
+      "size = 12",
+      "result = Box(size, size, size)",
+      "def helper():",
+      "    inner = 99",
+    ].join("\n");
+    const params = await build123dBackend.extractParams(src);
+    expect(params.map((p) => p.name)).toEqual(["size"]);
   });
 });

@@ -35,6 +35,11 @@ export const messages = sqliteTable("messages", {
   content: text("content").notNull(),
   // Assistant turn's serialized tool timeline (JSON) for reload.
   eventsJson: text("events_json"),
+  // User-message origin: own "chat" vs app-injected auto-"repair"/"vision".
+  kind: text("kind")
+    .notNull()
+    .default("chat")
+    .$type<"chat" | "repair" | "vision">(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 

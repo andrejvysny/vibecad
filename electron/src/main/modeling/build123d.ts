@@ -5,9 +5,12 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { cleanSpawnEnv } from "../spawn-env.js";
 import { getSkillsBase } from "../paths.js";
+import { parseBrepDiagnostics } from "../diagnostics/brep.js";
+import { classify, parseComment, sectionOf } from "./param-comments.js";
 import type {
   BackendStatus,
   ExportFormat,
+  ModelDiagnostics,
   ModelingBackend,
   Param,
   RenderRequest,
@@ -97,6 +100,25 @@ async function run(cmd: string, args: string[]): Promise<void> {
   }
 }
 
+/** Like spawnAsync but also captures stdout (the diagnostics JSON). */
+function spawnCapture(
+  cmd: string,
+  args: string[],
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: cleanSpawnEnv(),
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
 let resolvedPython: string | null = null;
 
 export const build123dBackend: ModelingBackend = {
@@ -178,18 +200,43 @@ export const build123dBackend: ModelingBackend = {
     return { ok: code === 0, errors: stderr.split("\n").filter(Boolean) };
   },
 
+  async brepDiagnostics(modelPath: string): Promise<ModelDiagnostics | null> {
+    const py = resolvedPython;
+    if (!py) return null;
+    const { code, stdout } = await spawnCapture(py, [
+      getHarnessPath(),
+      modelPath,
+      "--diagnostics",
+    ]);
+    if (code !== 0) return null;
+    return parseBrepDiagnostics(stdout);
+  },
+
   async extractParams(source: string): Promise<Param[]> {
     const params: Param[] = [];
-    const re = /^(\w+)\s*=\s*([\d.]+)\s*(?:#.*)?$/gm;
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(source)) !== null) {
-      const lineIndex = source.slice(0, match.index).split("\n").length - 1;
-      params.push({
-        name: match[1] ?? "",
-        value: parseFloat(match[2] ?? "0"),
-        line: lineIndex,
-      });
-    }
+    // top-level `name = <literal>` with an optional `# PARAM [..] desc` annotation
+    const assign =
+      /^(\w+)\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^#\n]+?)\s*(?:#\s*(.*))?$/;
+    let section: string | undefined;
+    source.split("\n").forEach((line, i) => {
+      if (/^\s/.test(line)) return; // top-level assignments only
+      const sec = sectionOf(line);
+      if (sec !== null) {
+        section = sec;
+        return;
+      }
+      const m = assign.exec(line);
+      if (!m) return;
+      const { type, value } = classify((m[2] ?? "").trim());
+      if (type === "expression" || type === "array") return; // not editable
+      const param: Param = { name: m[1] ?? "", value, type, line: i };
+      const comment = (m[3] ?? "").trim();
+      if (/^PARAM\b/i.test(comment)) {
+        parseComment(comment.replace(/^PARAM\s*/i, ""), param);
+      }
+      if (section) param.section = section;
+      params.push(param);
+    });
     return params;
   },
 };

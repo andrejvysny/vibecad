@@ -67,8 +67,15 @@ export function App() {
     const unsubMesh = window.api.onPreviewMeshReady(() => {
       useProjectStore.getState().bumpMesh();
     });
+    // Snapshot PNGs landed → re-attach the inline result's thumbnail.
+    const unsubPreviewUpdated = window.api.onPreviewUpdated(() => {
+      useAgentStore.getState().refreshLastResult();
+    });
     const unsubPreviewError = window.api.onPreviewError(({ message }) => {
       setError(`Preview render failed: ${message}`);
+    });
+    const unsubTurnStatus = window.api.onTurnStatus((p) => {
+      useAgentStore.getState().setTurnStatus(p);
     });
     const unsubWorkflow = window.api.onWorkflowStep((p) => {
       useWorkflowStore.getState().onStep(p);
@@ -77,7 +84,9 @@ export function App() {
       unsubEvent();
       unsubWorkspace();
       unsubMesh();
+      unsubPreviewUpdated();
       unsubPreviewError();
+      unsubTurnStatus();
       unsubWorkflow();
     };
   }, []);

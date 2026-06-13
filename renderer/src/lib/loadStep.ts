@@ -24,12 +24,40 @@ type OcModuleFactory = new (mod: {
   locateFile: (path: string) => string;
 }) => Promise<OpenCascadeInstance>;
 
-// Full OCCT wasm is huge — init once, reuse for every STEP load.
+/** Thrown when the OCCT WASM kernel fails or times out initializing — the viewer
+ *  catches it and falls back to the always-present STL. */
+export class StepViewerInitError extends Error {
+  override readonly name = "StepViewerInitError";
+}
+
+const INIT_TIMEOUT_MS = 30_000;
+
+// Full OCCT wasm is huge — init once, reuse for every STEP load. A failed init is
+// NOT cached: ocPromise is reset to null so a transient failure can retry.
 let ocPromise: Promise<OpenCascadeInstance> | null = null;
 function occt(): Promise<OpenCascadeInstance> {
-  ocPromise ??= new (ocFactory as unknown as OcModuleFactory)({
+  if (ocPromise) return ocPromise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const init = new (ocFactory as unknown as OcModuleFactory)({
     locateFile: (path) => (path.endsWith(".wasm") ? wasmUrl : path),
   });
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(new StepViewerInitError("OCCT WASM init timed out after 30s")),
+      INIT_TIMEOUT_MS,
+    );
+  });
+  ocPromise = Promise.race([init, timeout])
+    .finally(() => clearTimeout(timer))
+    .catch((err: unknown) => {
+      ocPromise = null; // allow a retry on the next attempt
+      throw err instanceof StepViewerInitError
+        ? err
+        : new StepViewerInitError(
+            err instanceof Error ? err.message : String(err),
+          );
+    });
   return ocPromise;
 }
 

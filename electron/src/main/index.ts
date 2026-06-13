@@ -8,7 +8,7 @@ import {
   session,
   shell,
 } from "electron";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, delimiter, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   copyFile,
@@ -18,17 +18,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import log from "electron-log/main";
-import { eq } from "drizzle-orm";
-import {
-  detectAgents,
-  getAdapter,
-  killActive,
-  registerActive,
-} from "./agents/index.js";
+import { detectAgents, killActive } from "./agents/index.js";
 import { detectBackends, getBackend } from "./modeling/index.js";
-import { resolveOpenscad } from "./modeling/resolve-openscad.js";
 import { initDb } from "./db/index.js";
-import { projects } from "./db/schema.js";
 import {
   addReference,
   createProject,
@@ -48,22 +40,13 @@ import {
   writeInstructions,
   type ProjectRow,
 } from "./projects.js";
-import {
-  getOrCreateSession,
-  insertMessage,
-  listMessages,
-  resetSessionAgent,
-  setAgentSessionId,
-} from "./chat.js";
-import { getSkillsDir } from "./paths.js";
-import { buildAgentContext } from "./agent-context.js";
-import {
-  deleteWorkflow,
-  getWorkflow,
-  listWorkflows,
-  saveWorkflow,
-} from "./workflows.js";
+import { listMessages, resetSessionAgent } from "./chat.js";
+import { deleteWorkflow, listWorkflows, saveWorkflow } from "./workflows.js";
 import { unwatchProject, watchProject } from "./workspace.js";
+import { getSkillsBase } from "./paths.js";
+import { abortTurn, runAgentTurn, runWorkflow } from "./agent-run.js";
+import { exportPreviewMesh, latestModel } from "./preview.js";
+import { getMainWindow, setMainWindow, sendToRenderer } from "./window.js";
 import type {
   RunAgentPayload,
   StopAgentPayload,
@@ -88,7 +71,6 @@ import type {
   SaveWorkflowPayload,
   DeleteWorkflowPayload,
   RunWorkflowPayload,
-  WorkflowStepPayload,
   DeleteProjectPayload,
   RenameProjectPayload,
   SetProjectAgentPayload,
@@ -98,7 +80,6 @@ import type {
   PickImagesPayload,
   SaveAttachmentPayload,
 } from "../../../shared/ipc.js";
-import type { AgentEvent } from "../../../shared/types.js";
 
 log.initialize();
 
@@ -125,8 +106,6 @@ log.info(
   `[boot] VibeCAD ${app.getVersion()} | packaged=${app.isPackaged} | platform=${process.platform}-${process.arch}`,
 );
 
-let mainWindow: BrowserWindow | null = null;
-
 function getRendererUrl(): string {
   if (!app.isPackaged) return "http://127.0.0.1:1420";
   return `file://${join(process.resourcesPath, "renderer", "index.html")}`;
@@ -149,7 +128,7 @@ function toRecord(row: ProjectRow): ProjectRecord {
 let watchedProjectId: string | null = null;
 
 function emitFiles(projectId: string, files: string[]): void {
-  mainWindow?.webContents.send("workspace:changed", { projectId, files });
+  sendToRenderer("workspace:changed", { projectId, files });
 }
 
 async function setActiveWatch(projectId: string, dir: string): Promise<void> {
@@ -204,7 +183,7 @@ const TITLEBAR_HEIGHT = 36;
 function createWindow(): void {
   const isMac = process.platform === "darwin";
 
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1100,
@@ -230,18 +209,19 @@ function createWindow(): void {
       webSecurity: true,
     },
   });
+  setMainWindow(win);
 
-  mainWindow.once("ready-to-show", () => {
-    mainWindow?.show();
-    if (!app.isPackaged) mainWindow?.webContents.openDevTools();
+  win.once("ready-to-show", () => {
+    win.show();
+    if (!app.isPackaged) win.webContents.openDevTools();
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: "deny" };
   });
 
-  mainWindow.webContents.on("will-navigate", (event, url) => {
+  win.webContents.on("will-navigate", (event, url) => {
     const allowed = app.isPackaged
       ? /^file:\/\//.test(url)
       : /^http:\/\/127\.0\.0\.1:1420/.test(url);
@@ -251,11 +231,11 @@ function createWindow(): void {
     }
   });
 
-  mainWindow.on("closed", () => {
-    mainWindow = null;
+  win.on("closed", () => {
+    setMainWindow(null);
   });
 
-  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => {
     log.error(`[window] did-fail-load ${url}: ${code} ${desc}`);
   });
 }
@@ -266,214 +246,19 @@ ipcMain.handle("agent:detect", async () => {
   return detectAgents();
 });
 
-/**
- * Run a single agent turn end-to-end: assemble context, spawn the adapter,
- * stream events to the renderer, persist the turn, and auto-render the result.
- * Shared by the `agent:run` IPC handler and the workflow runner (Phase 3).
- */
-async function runAgentTurn(
-  projectId: string,
-  prompt: string,
-  attachments?: string[],
-): Promise<void> {
-  // Fetch project to determine agent/backend + working dir
-  const db = initDb();
-  const [project] = db
-    .select()
-    .from(projects)
-    .where(eq(projects.id, projectId))
-    .all();
-
-  if (!project) throw new Error(`Project not found: ${projectId}`);
-
-  const adapter = getAdapter(
-    project.agentId as Parameters<typeof getAdapter>[0],
-  );
-  if (!adapter) throw new Error(`Agent not found: ${project.agentId}`);
-
-  // Expose the resolved OpenSCAD binary so the agent's headless validation
-  // works even when OpenSCAD isn't on PATH (the skill reads $OPENSCAD_BIN).
-  const env: Record<string, string> = {};
-  if (project.modelingBackend === "openscad") {
-    const osc = await resolveOpenscad();
-    if (osc) env["OPENSCAD_BIN"] = osc;
-  }
-
-  // Assemble per-project context (instructions + skills + references + images).
-  const { preamble, contextDirs } = await buildAgentContext(project, {
-    bundledSkillDir: getSkillsDir(project.modelingBackend),
-    attachments,
-  });
-
-  // Persist the user turn + resolve a resumable session.
-  const session = getOrCreateSession(projectId, project.agentId);
-  insertMessage(session.id, "user", prompt);
-
-  const child = adapter.spawn({
-    prompt,
-    workingDir: project.dir,
-    contextDirs,
-    systemPreamble: preamble,
-    // Only resume when the stored session belongs to the current agent; a
-    // switched-away resume id is foreign and must not be replayed.
-    sessionId:
-      session.agentId === project.agentId
-        ? (session.agentSessionId ?? undefined)
-        : undefined,
-    env,
-    model: project.agentModel ?? undefined,
-  });
-  registerActive(projectId, adapter.id, child);
-
-  // Accumulate the assistant turn so it can be persisted on close.
-  let assistantText = "";
-  const toolEvents: AgentEvent[] = [];
-
-  const emit = (event: AgentEvent): void => {
-    if (event.type === "session") {
-      setAgentSessionId(session.id, event.payload.sessionId);
-    } else if (event.type === "text_delta") {
-      assistantText += event.payload.text;
-    } else if (event.type === "tool_use" || event.type === "tool_result") {
-      toolEvents.push(event);
-    } else if (event.type === "done" && event.payload.sessionId) {
-      setAgentSessionId(session.id, event.payload.sessionId);
-    }
-    mainWindow?.webContents.send("agent:event", event);
-  };
-
-  // Watchdog: a healthy run streams partial-message/status events continuously,
-  // so total stdout silence means the CLI stalled on an API/MCP round-trip and
-  // will never exit (close never fires → chat wedged on "Thinking"). Kill it
-  // and surface an error so the UI recovers instead of hanging indefinitely.
-  const idleMs =
-    Number(process.env["VIBECAD_AGENT_IDLE_TIMEOUT_MS"]) || 120_000;
-  let watchdog: NodeJS.Timeout | undefined;
-  let stalled = false;
-  const bumpWatchdog = (): void => {
-    if (watchdog) clearTimeout(watchdog);
-    watchdog = setTimeout(() => {
-      stalled = true;
-      log.error(
-        `[agent:${project.agentId}] no output for ${idleMs}ms — killing stalled run`,
-      );
-      mainWindow?.webContents.send("agent:event", {
-        type: "error",
-        payload: {
-          message: `Agent stalled (no output for ${Math.round(idleMs / 1000)}s) and was stopped. Try again.`,
-        },
-      } satisfies AgentEvent);
-      adapter.kill(child);
-    }, idleMs);
-  };
-  bumpWatchdog();
-
-  child.stdout?.on("data", (chunk: Buffer) => {
-    bumpWatchdog();
-    for (const line of chunk.toString().split("\n").filter(Boolean)) {
-      for (const event of adapter.parseEvent(line)) emit(event);
-    }
-  });
-
-  child.stderr?.on("data", (chunk: Buffer) => {
-    bumpWatchdog();
-    log.warn(`[agent:${project.agentId}] stderr: ${chunk.toString()}`);
-  });
-
-  const persistAssistant = (): void => {
-    insertMessage(
-      session.id,
-      "assistant",
-      assistantText,
-      toolEvents.length ? JSON.stringify(toolEvents) : undefined,
-    );
-  };
-
-  return new Promise<void>((resolve, reject) => {
-    child.on("close", (code) => {
-      if (watchdog) clearTimeout(watchdog);
-      log.info(`[agent:${project.agentId}] exited code=${code}`);
-      persistAssistant();
-      // The watchdog already emitted an error + unstuck the UI; don't also send
-      // `done` (which would flip the message status back from error).
-      if (!stalled) {
-        mainWindow?.webContents.send("agent:event", {
-          type: "done",
-          payload: {},
-        } satisfies AgentEvent);
-      }
-      // Auto-render the latest model so the preview is deterministic.
-      void renderLatest(projectId);
-      resolve();
-    });
-    child.on("error", (err) => {
-      if (watchdog) clearTimeout(watchdog);
-      log.error(`[agent:${project.agentId}] error:`, err);
-      mainWindow?.webContents.send("agent:event", {
-        type: "error",
-        payload: { message: err.message },
-      } satisfies AgentEvent);
-      reject(err);
-    });
-  });
-}
-
 ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
-  await runAgentTurn(payload.projectId, payload.prompt, payload.attachments);
+  await runAgentTurn(
+    payload.projectId,
+    payload.prompt,
+    payload.attachments,
+    payload.verify ?? false,
+  );
 });
 
-/**
- * Execute a saved workflow's steps as sequential agent turns, starting at
- * `fromStep`. Each step is a full `runAgentTurn` (so chat/preview update as
- * usual). Run-state lives in the renderer; we just push `workflow:step` events.
- * A step with `autoAdvance:false` pauses the run AFTER it — the renderer resumes
- * by re-invoking with the next step index.
- */
-async function runWorkflow(
-  projectId: string,
-  slug: string,
-  fromStep = 0,
-): Promise<void> {
-  const wf = getWorkflow(projectId, slug);
-  const total = wf.steps.length;
-  const send = (
-    index: number,
-    status: WorkflowStepPayload["status"],
-    extra: Partial<WorkflowStepPayload> = {},
-  ): void => {
-    mainWindow?.webContents.send("workflow:step", {
-      projectId,
-      slug,
-      index,
-      total,
-      title: wf.steps[index]?.title ?? "",
-      status,
-      ...extra,
-    } satisfies WorkflowStepPayload);
-  };
-
-  for (let i = Math.max(0, fromStep); i < total; i++) {
-    const step = wf.steps[i];
-    if (!step) break;
-    send(i, "running");
-    try {
-      await runAgentTurn(projectId, step.prompt);
-    } catch (err) {
-      send(i, "error", {
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
-    send(i, "done");
-    if (i < total - 1 && step.autoAdvance === false) {
-      send(i, "paused", { nextStep: i + 1 });
-      return;
-    }
-  }
-  send(Math.max(0, total - 1), "finished");
-}
-
 ipcMain.handle("agent:stop", (_e, payload: StopAgentPayload) => {
+  // Abort the self-repair loop first so it won't spawn another turn, then kill
+  // the in-flight child.
+  abortTurn(payload.projectId);
   killActive(payload.projectId);
 });
 
@@ -492,8 +277,9 @@ async function attachmentsDir(projectId: string): Promise<string> {
 }
 
 ipcMain.handle("chat:pick-images", async (_e, payload: PickImagesPayload) => {
-  if (!mainWindow) return [];
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+  const win = getMainWindow();
+  if (!win) return [];
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     properties: ["openFile", "multiSelections"],
     filters: [
       { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] },
@@ -536,64 +322,6 @@ ipcMain.handle("model:export", async (_e, payload: ExportModelPayload) => {
   return backend.export(modelPath, format);
 });
 
-/** The newest model_NNN source file in a project, or null. */
-async function latestModel(project: ProjectRow): Promise<string | null> {
-  const ext = project.modelingBackend === "openscad" ? ".scad" : ".py";
-  const latest = (await readdir(project.dir))
-    .filter((f) => /^model_\d+/.test(f) && f.endsWith(ext))
-    .sort()
-    .at(-1);
-  return latest ? join(project.dir, latest) : null;
-}
-
-/**
- * Export the preview mesh for a model and notify the renderer. build123d renders
- * the precise STEP directly (and also writes an STL as the always-present print
- * mesh); OpenSCAD uses STL. All exports are headless (no GL → no render crash).
- */
-async function exportPreviewMesh(
-  projectId: string,
-  modelPath: string,
-): Promise<string> {
-  const project = getProject(projectId);
-  if (!project) throw new Error(`Project not found: ${projectId}`);
-  const backend = getBackend(project.modelingBackend);
-  if (!backend)
-    throw new Error(`Backend not available: ${project.modelingBackend}`);
-  const status = await backend.detect();
-  if (!status.available) {
-    throw new Error(
-      `${backend.name} not available${status.missing ? ` (missing: ${status.missing.join(", ")})` : ""}`,
-    );
-  }
-  let meshPath: string;
-  if (backend.id === "build123d") {
-    meshPath = await backend.export(modelPath, "step");
-    await backend.export(modelPath, "stl"); // print-ready mesh, always present
-  } else {
-    meshPath = await backend.export(modelPath, "stl");
-  }
-  mainWindow?.webContents.send("preview:mesh-ready", { projectId, meshPath });
-  return meshPath;
-}
-
-/** Find the newest model in a project and export its preview mesh. */
-async function renderLatest(projectId: string): Promise<void> {
-  try {
-    const project = getProject(projectId);
-    if (!project) return;
-    const modelPath = await latestModel(project);
-    if (!modelPath) return;
-    await exportPreviewMesh(projectId, modelPath);
-  } catch (err) {
-    log.error("[preview] mesh export failed:", err);
-    mainWindow?.webContents.send("preview:error", {
-      projectId,
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
 ipcMain.handle(
   "model:preview-mesh",
   async (_e, payload: PreviewMeshPayload) => {
@@ -615,10 +343,11 @@ ipcMain.handle("model:read", async (_e, payload: ReadModelPayload) => {
 // fs.watch picks the new file up and pushes workspace:changed, so the tree
 // refreshes on its own. Returns the new project-relative filename (or null).
 ipcMain.handle("model:import-step", async (_e, payload: ImportStepPayload) => {
-  if (!mainWindow) return null;
+  const win = getMainWindow();
+  if (!win) return null;
   const project = getProject(payload.projectId);
   if (!project) throw new Error(`Project not found: ${payload.projectId}`);
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     properties: ["openFile"],
     filters: [{ name: "STEP", extensions: ["step", "stp"] }],
   });
@@ -689,7 +418,11 @@ function patchSourceLine(
     lines[lineIdx] = `${prefix} ${formatted}${rest.slice(semi)}`;
   } else {
     const hash = rest.indexOf("#");
-    const tail = hash === -1 ? "" : `  ${rest.slice(hash)}`;
+    // Preserve the original gap before a trailing `# PARAM …` comment instead of
+    // collapsing it (don't reformat the agent's file on a param edit).
+    const gap =
+      hash === -1 ? "" : (rest.slice(0, hash).match(/\s+$/)?.[0] ?? "  ");
+    const tail = hash === -1 ? "" : `${gap}${rest.slice(hash)}`;
     lines[lineIdx] = `${prefix} ${formatted}${tail}`;
   }
   return lines.join("\n");
@@ -768,8 +501,9 @@ ipcMain.handle("project:list-skills", (_e, payload: ListSkillsPayload) =>
 ipcMain.handle(
   "project:import-skill",
   async (_e, payload: ImportSkillPayload) => {
-    if (mainWindow) {
-      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    const win = getMainWindow();
+    if (win) {
+      const { canceled, filePaths } = await dialog.showOpenDialog(win, {
         title: "Import skill (folder with SKILL.md, or a SKILL.md file)",
         properties: ["openFile", "openDirectory"],
         filters: [{ name: "Skill", extensions: ["md"] }],
@@ -794,8 +528,9 @@ ipcMain.handle(
 ipcMain.handle(
   "project:add-reference",
   async (_e, payload: AddReferencePayload) => {
-    if (mainWindow) {
-      const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    const win = getMainWindow();
+    if (win) {
+      const { canceled, filePaths } = await dialog.showOpenDialog(win, {
         title: "Add reference file(s)",
         properties: ["openFile", "multiSelections"],
       });
@@ -868,9 +603,10 @@ ipcMain.handle("app:get-versions", () => ({
 ipcMain.handle(
   "window:set-overlay-theme",
   (_e, theme: { color: string; symbolColor: string }) => {
-    if (process.platform === "darwin" || !mainWindow) return;
+    const win = getMainWindow();
+    if (process.platform === "darwin" || !win) return;
     try {
-      mainWindow.setTitleBarOverlay({
+      win.setTitleBarOverlay({
         color: theme.color,
         symbolColor: theme.symbolColor,
         height: TITLEBAR_HEIGHT,
@@ -912,20 +648,28 @@ function registerStudioProtocol(): void {
 
 // ──── Boot ───────────────────────────────────────────────────────────────────
 
+/** Prepend the bundled OpenSCAD library dir (BOSL2) to OPENSCADPATH so both our
+ *  headless exports and the agent's own `include <BOSL2/std.scad>` resolve it.
+ *  cleanSpawnEnv spreads process.env, so this reaches every spawned child. */
+function configureOpenscadPath(): void {
+  const libDir = join(getSkillsBase(), "openscad", "lib");
+  process.env["OPENSCADPATH"] = [libDir, process.env["OPENSCADPATH"]]
+    .filter(Boolean)
+    .join(delimiter);
+}
+
 app.whenReady().then(() => {
   installSecurityPolicy();
   registerStudioProtocol();
+  configureOpenscadPath();
   initDb();
   createWindow();
-
-  if (mainWindow) {
-    mainWindow.loadURL(getRendererUrl());
-  }
+  getMainWindow()?.loadURL(getRendererUrl());
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
-      mainWindow?.loadURL(getRendererUrl());
+      getMainWindow()?.loadURL(getRendererUrl());
     }
   });
 });

@@ -40,14 +40,19 @@ Per-workspace: `npm run <script> --workspace electron|renderer` (e.g. `make:mac`
 ```
 electron/src/
   main/
-    index.ts         # app boot, BrowserWindow, CSP, studio:// protocol, ALL ipcMain handlers
+    index.ts         # app boot, BrowserWindow, CSP, studio:// protocol, thin ipcMain handlers
+    window.ts        # mainWindow holder: setMainWindow/getMainWindow/sendToRenderer (no cycles)
+    agent-run.ts     # runAgentTurn → self-repair/escalate/vision loop, executeTurn, workflow runner
+    preview.ts       # latestModel, produceMesh, exportPreviewMesh, renderSnapshots, renderLatest
+    repair/          # gates.ts (runGateChain), policy.ts (decideNextAction/classifyDiagnostics/isEnvFailure), prompts.ts (pure)
+    diagnostics/     # stl-analyzer.ts (pure binary/ASCII STL geom), openscad-stderr.ts, brep.ts (Zod)
     projects.ts      # project lifecycle (create/list/rename/delete + skill copy into project)
-    chat.ts          # session/message persistence (one session per project; resume id mgmt)
+    chat.ts          # session/message persistence (messages.kind: chat|repair|vision); resume id mgmt
     workspace.ts     # fs.watch per project dir → workspace:changed
     paths.ts         # getSkillsDir/getSkillsBase (resolves bundled skills/ in dev vs packaged)
     spawn-env.ts     # cleanSpawnEnv() — strips macOS GUI vars so spawned CLIs run headless
     agents/          # AgentAdapter per CLI (claude-code, opencode, codex) + index registry
-    modeling/        # ModelingBackend per engine (openscad, build123d) + resolve-openscad + index
+    modeling/        # ModelingBackend per engine + param-comments.ts (shared classify/parseComment) + index
     db/{schema,index}.ts + migrations/
   preload/index.ts   # contextBridge → window.api (the ONLY renderer↔main surface)
 renderer/src/
@@ -89,13 +94,13 @@ Add a new agent/backend = implement the interface in `main/agents/` or `main/mod
 `window.api` (preload) is the only bridge — renderer never touches `ipcRenderer` directly, and there is no `nodeIntegration`. **Channel-name strings are literals in `main/index.ts` and `preload/index.ts`; `shared/ipc.ts` holds only the payload _types_** (the spec's claim that all channel names live there is not yet true — keep the two sides in sync by hand).
 
 - Renderer→Main (`invoke`/`handle`): agent (`agent:detect`, `agent:run`, `agent:stop`), chat (`chat:history`, `chat:pick-images`, `chat:save-attachment`), backend (`backend:detect`), model (`model:export`, `model:extract-params`, `model:set-param`, `model:preview-mesh`, `model:read`, `model:import-step`), `shell:reveal`, project (`project:create`/`list`/`open`/`rename`/`set-agent`/`set-model`/`delete`), `app:get-versions`, `window:set-overlay-theme`.
-- Main→Renderer (`send`/`on`): `agent:event` (per stdout line via `adapter.parseEvent`), `workspace:changed` (fs.watch), `preview:mesh-ready` `{projectId, meshPath}` and `preview:error` `{projectId, message}` (emitted by `exportPreviewMesh`/`renderLatest`). `preview:updated` is still exposed in preload (`onPreviewUpdated`) but **never emitted by main** — dead path; ignore it.
+- Main→Renderer (`send`/`on`): `agent:event` (per stdout line via `adapter.parseEvent`), `workspace:changed` (fs.watch), `preview:mesh-ready` `{projectId, meshPath}` and `preview:error` `{projectId, message}`, `turn:status` `{projectId, phase, attempt?, …}` (the accuracy loop's live phase: validating/repairing/escalating/vision/ok/failed → renderer status chip), and `preview:updated` `{projectId, angle, pngPath}` (now **live** — emitted per snapshot by `renderSnapshots`; revives the formerly-dead channel).
 
 `agent:run` loads the project row to resolve agent + backend + working dir, spawns the adapter, persists the turn via `chat.ts`, and forwards each stdout line as an `agent:event` until close. Chat history survives reload (sessions + messages tables; one session per project; `--resume` id reset when the agent is changed).
 
 ## Rendering / preview reality
 
-`render()` is now wired. The main process **exports the preview mesh itself** — `exportPreviewMesh()` calls `backend.export()` headlessly and pushes `preview:mesh-ready` to the renderer (triggered by `model:preview-mesh`, by a `set-param` edit, or by `renderLatest` after the watcher sees a new `model_NNN`). All exports run headless (no GL → no OpenSCAD GUI crash, see `spawn-env.ts`).
+The main process **exports the preview mesh itself**, headlessly (no GL → no OpenSCAD GUI crash, see `spawn-env.ts`). Two paths: (1) the one-off IPC `exportPreviewMesh()` (`model:preview-mesh`, a `set-param` edit); (2) the **accuracy loop** in `agent-run.ts` — after a model-producing turn, `runGateChain()` validates → exports (the export gate's `produceMesh` artifact is reused, no double export) → diagnostics; on accept it pushes `preview:mesh-ready`. A failing gate injects up to 2 auto-repair turns + 1 model escalation (`ESCALATION_MODELS`); a passing-after-repair / "Verify"-toggled / final-workflow-step turn triggers a vision pass (`renderSnapshots` + a Read-the-PNGs turn). All gate checks are deterministic and token-free; tokens are spent only on repair/vision turns.
 
 Per backend:
 

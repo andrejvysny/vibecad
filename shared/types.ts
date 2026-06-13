@@ -4,6 +4,7 @@ export type ExportFormat = "stl" | "3mf" | "step" | "dxf";
 export type CameraPreset = "front" | "top" | "iso";
 export type BackendId = "openscad" | "build123d";
 export type AgentId = "claude-code" | "opencode" | "codex";
+export type OutputNeed = "print" | "cad";
 
 export interface SpawnOpts {
   prompt: string;
@@ -114,6 +115,8 @@ export interface Param {
   options?: string[];
   description?: string;
   unit?: string;
+  // Group heading from a `// === Section ===` / `# === Section ===` comment.
+  section?: string;
 }
 
 export interface ModelingBackend {
@@ -125,8 +128,17 @@ export interface ModelingBackend {
   detect(): Promise<BackendStatus>;
   render(req: RenderRequest): Promise<string[]>;
   export(modelPath: string, format: ExportFormat): Promise<string>;
+  // Like export() but also surfaces the tool's stderr — CGAL/mesh warnings that
+  // exit 0 and would otherwise be lost. The diagnostics gate reads it (OpenSCAD).
+  exportWithLog?(
+    modelPath: string,
+    format: ExportFormat,
+  ): Promise<{ path: string; stderr: string }>;
   validate(modelPath: string): Promise<ValidationResult>;
   extractParams(source: string): Promise<Param[]>;
+  // B-rep diagnostics from the modeling kernel (build123d → OCCT BRepCheck).
+  // Absent ⇒ the gate relies on the mesh analyzer alone (OpenSCAD).
+  brepDiagnostics?(modelPath: string): Promise<ModelDiagnostics | null>;
 }
 
 // A saved, re-runnable recipe: an ordered list of prompts the agent executes as
@@ -171,3 +183,56 @@ export interface DetectedBackend {
   exports: ExportFormat[];
   missing?: string[];
 }
+
+// ──── Accuracy stack: gates, diagnostics, repair policy (Phase 1+) ─────────────
+
+export type GateId = "validate" | "export" | "diagnostics" | "vision";
+export type GateStatus = "pass" | "warn" | "fail" | "skipped";
+
+export interface GateResult {
+  gate: GateId;
+  status: GateStatus;
+  errors: string[]; // hard failures → drive repair
+  warnings: string[]; // soft context → appended to prompts, never block
+  durationMs: number;
+}
+
+export interface ModelDiagnostics {
+  source: "stl" | "brep";
+  bbox: { min: [number, number, number]; max: [number, number, number] };
+  volumeMm3: number | null;
+  triangles?: number;
+  shells: number; // connected components (STL) / shell count (B-rep)
+  watertight: boolean | null;
+  valid: boolean | null; // BRepCheck validity (build123d only)
+  nonManifoldEdges?: number;
+}
+
+export interface TurnVerdict {
+  modelPath: string | null; // null ⇒ Q&A turn, skip pipeline entirely
+  results: GateResult[];
+  diagnostics?: ModelDiagnostics;
+  meshPath?: string; // export-gate artifact, reused for preview:mesh-ready
+  ok: boolean; // every non-skipped gate ≠ "fail"
+  envFailure: boolean; // binary missing etc. — never burn agent tokens on this
+}
+
+export type RepairAction =
+  | { kind: "accept" }
+  | { kind: "repair"; attempt: number }
+  | { kind: "escalate"; model: string }
+  | { kind: "give-up" };
+
+// L6 — no schema change; mirrors AGENT_MODELS presets.
+export const ESCALATION_MODELS: Record<AgentId, string> = {
+  "claude-code": "opus",
+  codex: "gpt-5.5",
+  opencode: "anthropic/claude-opus-4-1",
+};
+
+// L5 — codex is text-only, no image ingestion.
+export const AGENT_SUPPORTS_VISION: Record<AgentId, boolean> = {
+  "claude-code": true,
+  opencode: true,
+  codex: false,
+};

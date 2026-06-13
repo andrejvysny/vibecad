@@ -6,6 +6,7 @@ import type {
   DetectedAgent,
   DetectedBackend,
   ExportFormat,
+  GateId,
   Workflow,
   WorkflowRunStatus,
 } from "./types";
@@ -17,13 +18,18 @@ export type RunAgentPayload = {
   sessionId?: string;
   // Absolute paths to image files (already saved into the project) to reference.
   attachments?: string[];
+  // Composer "Verify" toggle (Phase 3): force a vision-in-the-loop pass.
+  verify?: boolean;
 };
 export type ChatHistoryPayload = { projectId: string };
+// `kind` distinguishes a user's own message ("chat") from app-injected
+// auto-repair / vision turns so the renderer can collapse the latter.
 export type ChatMessageRecord = {
   id: string;
   role: "user" | "assistant" | "tool";
   content: string;
   eventsJson?: string;
+  kind?: "chat" | "repair" | "vision";
 };
 export type PickImagesPayload = { projectId: string };
 export type SaveAttachmentPayload = {
@@ -109,6 +115,24 @@ export type PreviewUpdatedPayload = {
 };
 export type PreviewErrorPayload = { projectId: string; message: string };
 export type WorkspaceChangedPayload = { projectId: string; files: string[] };
+// Live progress of the post-turn accuracy pipeline (validate → repair → vision).
+// Drives the renderer status chip; "ok"/"failed" are terminal.
+export type TurnPhase =
+  | "validating"
+  | "rendering"
+  | "repairing"
+  | "escalating"
+  | "vision"
+  | "ok"
+  | "failed";
+export type TurnStatusPayload = {
+  projectId: string;
+  phase: TurnPhase;
+  attempt?: number;
+  maxAttempts?: number;
+  gate?: GateId;
+  message?: string;
+};
 // Per-step progress for a running workflow. `index` is the step the event is
 // about; `nextStep` accompanies a "paused" status (where to resume).
 export type WorkflowStepPayload = {

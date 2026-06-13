@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { useBackendStore } from "../../stores/backend.store";
 import { useProjectStore } from "../../stores/project.store";
@@ -6,7 +7,7 @@ import { useAgentStore } from "../../stores/agent.store";
 import { useViewStore } from "../../stores/view.store";
 import { useViewportStore } from "../../stores/viewport.store";
 import { studioUrl } from "../../lib/studio";
-import { loadStepGeometry } from "../../lib/loadStep";
+import { loadStepGeometry, StepViewerInitError } from "../../lib/loadStep";
 import { ActionButton, Divider, ToolbarButton } from "../ui";
 import { ParamPanel } from "./ParamPanel";
 import { Viewer } from "./viewer";
@@ -151,31 +152,46 @@ export function Preview({ project }: Props) {
     // re-renders of the current one.
     const resetCamera = loadedPathRef.current !== meshPath;
     const isStep = meshFormat === "step";
-    if (isStep) setConverting(true);
-    fetch(studioUrl(meshPath))
-      .then((r) => {
+
+    const apply = (
+      geometry: THREE.BufferGeometry,
+      edges: Float32Array | null,
+    ) => {
+      if (cancelled) return;
+      viewer.setGeometry(geometry, { resetCamera, edges });
+      loadedPathRef.current = meshPath;
+      setEmpty(false);
+      setDims(viewer.getBounds());
+      setGridCell(viewer.getGridCell());
+    };
+    const fetchBuf = (url: string): Promise<ArrayBuffer> =>
+      fetch(studioUrl(url)).then((r) => {
         if (!r.ok) throw new Error(`load failed (${r.status})`);
         return r.arrayBuffer();
-      })
-      .then((buf) =>
-        isStep
-          ? loadStepGeometry(buf)
-          : { geometry: new STLLoader().parse(buf), edges: null },
-      )
-      .then(({ geometry, edges }) => {
-        if (cancelled) return;
-        viewer.setGeometry(geometry, { resetCamera, edges });
-        loadedPathRef.current = meshPath;
-        setEmpty(false);
-        setDims(viewer.getBounds());
-        setGridCell(viewer.getGridCell());
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (!cancelled && isStep) setConverting(false);
       });
+
+    const run = async (): Promise<void> => {
+      if (isStep) setConverting(true);
+      try {
+        const buf = await fetchBuf(meshPath);
+        if (!isStep) return apply(new STLLoader().parse(buf), null);
+        try {
+          const { geometry, edges } = await loadStepGeometry(buf);
+          apply(geometry, edges);
+        } catch (e) {
+          if (!(e instanceof StepViewerInitError)) throw e;
+          // OCCT kernel unavailable → fall back to the always-present STL.
+          const stlBuf = await fetchBuf(meshPath.replace(/\.step$/i, ".stl"));
+          apply(new STLLoader().parse(stlBuf), null);
+          if (!cancelled) setToast("STEP viewer unavailable — showing STL");
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled && isStep) setConverting(false);
+      }
+    };
+    void run();
     return () => {
       cancelled = true;
     };

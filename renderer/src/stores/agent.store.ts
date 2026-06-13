@@ -1,7 +1,17 @@
 import { create } from "zustand";
 import type { AgentEvent, DetectedAgent } from "@shared/types";
+import type { TurnStatusPayload } from "@shared/ipc";
 import { useProjectStore } from "./project.store";
 import { latestModelBase } from "./preview";
+
+type TurnKind = "chat" | "repair" | "vision";
+
+/** Headline for a collapsed auto-turn, derived from its persisted prompt. */
+function deriveLabel(content: string, kind: TurnKind): string {
+  if (kind === "vision") return "👁 Vision check";
+  const m = /repair attempt (\d+)\/(\d+)/.exec(content);
+  return m ? `🔧 Auto-repair pass ${m[1]}/${m[2]}` : "🔧 Auto-repair";
+}
 
 export interface ToolCard {
   id: string;
@@ -27,6 +37,9 @@ export interface ChatMessage {
   status: "streaming" | "done" | "error";
   attachments?: string[];
   result?: ResultRef;
+  kind?: TurnKind;
+  // Set on app-injected repair/vision user messages → rendered collapsed.
+  collapsedLabel?: string;
 }
 
 /** Snapshot the active project's newest model as an inline result, if any. */
@@ -51,6 +64,8 @@ interface RunPayload {
   prompt: string;
   projectId: string;
   attachments?: string[];
+  // Force a vision-in-the-loop check this turn (composer "Verify" toggle).
+  verify?: boolean;
 }
 
 interface AgentStore {
@@ -58,10 +73,13 @@ interface AgentStore {
   activeAgentId: string | null;
   running: boolean;
   messages: ChatMessage[];
+  // Live phase of the post-turn accuracy pipeline (validate/repair/escalate).
+  turnStatus: TurnStatusPayload | null;
   detect(): Promise<void>;
   run(payload: RunPayload): Promise<void>;
   stop(projectId: string): Promise<void>;
   pushEvent(event: AgentEvent): void;
+  setTurnStatus(status: TurnStatusPayload): void;
   loadHistory(projectId: string): Promise<void>;
   // Back-fill the last assistant turn's inline result once its files land
   // (the agent's render PNG/STL may appear after the `done` event).
@@ -121,6 +139,7 @@ export const useAgentStore = create<AgentStore>((set, get) => {
     activeAgentId: null,
     running: false,
     messages: [],
+    turnStatus: null,
 
     async detect() {
       const agents = await window.api.detectAgents();
@@ -128,7 +147,7 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       set({ detected: agents, activeAgentId: active?.id ?? null });
     },
 
-    async run({ prompt, projectId, attachments }) {
+    async run({ prompt, projectId, attachments, verify }) {
       const userMsg: ChatMessage = {
         id: uid(),
         role: "user",
@@ -146,10 +165,11 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       };
       set((s) => ({
         running: true,
+        turnStatus: null,
         messages: [...s.messages, userMsg, assistantMsg],
       }));
       try {
-        await window.api.runAgent({ prompt, projectId, attachments });
+        await window.api.runAgent({ prompt, projectId, attachments, verify });
       } catch (err) {
         get().pushEvent({
           type: "error",
@@ -158,7 +178,9 @@ export const useAgentStore = create<AgentStore>((set, get) => {
           },
         });
       } finally {
-        set({ running: false });
+        // The whole self-repair loop has resolved; the run() owns `running`
+        // (inner repair turns each emit `done`, which must NOT re-enable input).
+        set({ running: false, turnStatus: null });
       }
     },
 
@@ -166,6 +188,7 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       await window.api.stopAgent({ projectId });
       set((s) => ({
         running: false,
+        turnStatus: null,
         messages: patchLast(s.messages, (m) =>
           m.status === "streaming" ? { ...m, status: "done" } : m,
         ),
@@ -211,10 +234,12 @@ export const useAgentStore = create<AgentStore>((set, get) => {
           }));
           return;
         case "done": {
+          // One `done` arrives per turn (chat + each repair). It finalizes the
+          // trailing assistant bubble but must NOT clear `running` — the loop
+          // may still spawn repair turns; run()'s finally owns `running`.
           flushText();
           const result = captureResult();
           set((s) => ({
-            running: false,
             messages: patchLast(s.messages, (m) => ({
               ...m,
               status: "done",
@@ -240,18 +265,59 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       }
     },
 
+    setTurnStatus(status) {
+      // A repair/escalation turn gets its own collapsed user line + a fresh
+      // assistant bubble so its output doesn't merge into the prior turn.
+      if (status.phase === "repairing" || status.phase === "escalating") {
+        const collapsedLabel =
+          status.phase === "escalating"
+            ? `⏫ ${status.message ?? "Escalating model"}`
+            : `🔧 Auto-repair pass ${status.attempt}/${status.maxAttempts}`;
+        const repairUser: ChatMessage = {
+          id: uid(),
+          role: "user",
+          text: status.gate
+            ? `${status.gate} gate failed — auto-repairing.`
+            : "Auto-repairing.",
+          tools: [],
+          status: "done",
+          kind: "repair",
+          collapsedLabel,
+        };
+        const assistantMsg: ChatMessage = {
+          id: uid(),
+          role: "assistant",
+          text: "",
+          tools: [],
+          status: "streaming",
+        };
+        set((s) => ({
+          turnStatus: status,
+          messages: [...s.messages, repairUser, assistantMsg],
+        }));
+        return;
+      }
+      set({ turnStatus: status });
+    },
+
     async loadHistory(projectId) {
       const records = await window.api.chatHistory({ projectId });
       set({
         messages: records
           .filter((r) => r.role !== "tool")
-          .map((r) => ({
-            id: r.id,
-            role: r.role as "user" | "assistant",
-            text: r.content,
-            tools: r.role === "assistant" ? hydrateTools(r.eventsJson) : [],
-            status: "done" as const,
-          })),
+          .map((r) => {
+            const kind = (r.kind ?? "chat") as TurnKind;
+            const auto = r.role === "user" && kind !== "chat";
+            return {
+              id: r.id,
+              role: r.role as "user" | "assistant",
+              text: r.content,
+              tools: r.role === "assistant" ? hydrateTools(r.eventsJson) : [],
+              status: "done" as const,
+              kind,
+              ...(auto ? { collapsedLabel: deriveLabel(r.content, kind) } : {}),
+            };
+          }),
       });
     },
 

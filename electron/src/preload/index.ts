@@ -35,6 +35,7 @@ import type {
   PreviewErrorPayload,
   PreviewMeshReadyPayload,
   WorkspaceChangedPayload,
+  TurnStatusPayload,
   ChatHistoryPayload,
   ChatMessageRecord,
   PickImagesPayload,
@@ -141,6 +142,8 @@ contextBridge.exposeInMainWorld("api", {
     on<PreviewMeshReadyPayload>("preview:mesh-ready", cb),
   onWorkspaceChanged: (cb: (payload: WorkspaceChangedPayload) => void) =>
     on<WorkspaceChangedPayload>("workspace:changed", cb),
+  onTurnStatus: (cb: (payload: TurnStatusPayload) => void) =>
+    on<TurnStatusPayload>("turn:status", cb),
   onWorkflowStep: (cb: (payload: WorkflowStepPayload) => void) =>
     on<WorkflowStepPayload>("workflow:step", cb),
 

@@ -12,6 +12,7 @@ import { cn } from "../../lib/cn";
 import { Chip, IconButton } from "../ui";
 import type { Project } from "../../stores/project.store";
 import { AGENT_MODELS, type AgentId } from "@shared/types";
+import type { TurnStatusPayload } from "@shared/ipc";
 
 interface Props {
   project: Project | null;
@@ -46,7 +47,9 @@ function fileToBase64(file: File): Promise<string> {
 export function Chat({ project }: Props) {
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<string[]>([]);
-  const { messages, running, run, stop, detected } = useAgentStore();
+  const [verify, setVerify] = useState(false);
+  const { messages, running, run, stop, detected, turnStatus } =
+    useAgentStore();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -72,7 +75,12 @@ export function Chat({ project }: Props) {
 
   function send(text: string) {
     if (!text.trim() || !project) return;
-    void run({ prompt: text.trim(), projectId: project.id, attachments });
+    void run({
+      prompt: text.trim(),
+      projectId: project.id,
+      attachments,
+      verify,
+    });
     setPrompt("");
     setAttachments([]);
   }
@@ -120,6 +128,7 @@ export function Chat({ project }: Props) {
         {messages.map((m) => (
           <MessageView key={m.id} message={m} />
         ))}
+        {running && turnStatus && <TurnStatusChip status={turnStatus} />}
         <div ref={bottomRef} />
       </div>
 
@@ -191,7 +200,7 @@ export function Chat({ project }: Props) {
             }}
           />
 
-          {/* Action bar: attach · hint · send/stop */}
+          {/* Action bar: attach · verify · hint · send/stop */}
           <div className="flex items-center gap-2 px-2 pb-2">
             <IconButton
               onClick={() => void handlePick()}
@@ -201,6 +210,20 @@ export function Chat({ project }: Props) {
             >
               <PaperclipIcon />
             </IconButton>
+            <button
+              type="button"
+              onClick={() => setVerify((v) => !v)}
+              disabled={!project}
+              title="Render the model and have the agent visually verify it against your request"
+              className={cn(
+                "shrink-0 px-2 py-0.5 rounded text-[11px] border transition-colors disabled:opacity-40",
+                verify
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                  : "border-white/10 text-gray-500 hover:text-gray-300",
+              )}
+            >
+              👁 Verify
+            </button>
             <span className="flex-1 min-w-0 truncate text-[11px] text-gray-600 select-none">
               <kbd className="font-sans text-gray-500">⌘↵</kbd> to send · paste
               or drop images
@@ -313,6 +336,7 @@ function Elapsed() {
 }
 
 function MessageView({ message }: { message: ChatMessage }) {
+  if (message.collapsedLabel) return <CollapsedAuto message={message} />;
   if (message.role === "user") {
     return (
       <div className="flex flex-col items-end gap-1">
@@ -374,6 +398,59 @@ function MessageView({ message }: { message: ChatMessage }) {
       {message.result && <ResultCard result={message.result} />}
     </div>
   );
+}
+
+// ── Auto-repair / vision turns ───────────────────────────────────────────────
+// App-injected turns collapse to a single expandable line so they don't clutter
+// the conversation with prompts the user didn't write.
+
+function CollapsedAuto({ message }: { message: ChatMessage }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-amber-500/20 bg-amber-500/[0.06] text-[11px] text-amber-300/90 hover:border-amber-500/40"
+      >
+        <Chevron open={open} />
+        {message.collapsedLabel}
+      </button>
+      {open && message.text && (
+        <div className="max-w-[85%] text-[11px] text-gray-500 whitespace-pre-wrap text-right">
+          {message.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Live status of the post-turn accuracy pipeline, shown under the last message.
+function TurnStatusChip({ status }: { status: TurnStatusPayload }) {
+  const text = chipText(status);
+  if (!text) return null;
+  return (
+    <div className="flex items-center gap-2 text-xs text-amber-400/90">
+      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+      {text}
+    </div>
+  );
+}
+
+function chipText(s: TurnStatusPayload): string | null {
+  switch (s.phase) {
+    case "validating":
+      return "Validating geometry…";
+    case "rendering":
+      return "Rendering…";
+    case "repairing":
+      return `Repairing… (pass ${s.attempt}/${s.maxAttempts})`;
+    case "escalating":
+      return s.message ?? "Escalating to a stronger model…";
+    case "vision":
+      return "Visual check…";
+    default:
+      return null; // ok / failed are surfaced inline
+  }
 }
 
 // ── Tool strip ───────────────────────────────────────────────────────────────

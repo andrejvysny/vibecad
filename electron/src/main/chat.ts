@@ -57,6 +57,7 @@ export function insertMessage(
   role: "user" | "assistant",
   content: string,
   eventsJson?: string,
+  kind: "chat" | "repair" | "vision" = "chat",
 ): void {
   initDb()
     .insert(messages)
@@ -66,6 +67,7 @@ export function insertMessage(
       role,
       content,
       eventsJson: eventsJson ?? null,
+      kind,
       createdAt: new Date(),
     })
     .run();
@@ -92,5 +94,6 @@ export function listMessages(projectId: string): ChatMessageRecord[] {
       role: m.role,
       content: m.content,
       eventsJson: m.eventsJson ?? undefined,
+      kind: m.kind,
     }));
 }

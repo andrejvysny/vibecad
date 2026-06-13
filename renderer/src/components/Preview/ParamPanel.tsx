@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { Param } from "@shared/types";
 import { useProjectStore } from "../../stores/project.store";
 import { cn } from "../../lib/cn";
@@ -113,18 +113,35 @@ export function ParamPanel({ project }: Props) {
           {errorMsg && (
             <p className="text-amber-400/90 leading-snug">{errorMsg}</p>
           )}
-          {params.map((p) => (
-            <Control
-              key={p.name}
-              param={p}
-              value={values[p.name] ?? p.value}
-              onChange={(v) => update(p.name, v)}
-            />
-          ))}
+          {params.map((p, i) => {
+            const newSection =
+              p.section && p.section !== params[i - 1]?.section;
+            return (
+              <Fragment key={p.name}>
+                {newSection && (
+                  <div className="pt-1 text-[10px] font-medium uppercase tracking-wide text-gray-500 border-t border-white/5">
+                    {p.section}
+                  </div>
+                )}
+                <Control
+                  param={p}
+                  value={values[p.name] ?? p.value}
+                  onChange={(v) => update(p.name, v)}
+                />
+              </Fragment>
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+/** Clamp a numeric edit to the param's declared min/max (one-sided ok). */
+function clampNum(n: number, p: Param): number {
+  if (p.min !== undefined && n < p.min) return p.min;
+  if (p.max !== undefined && n > p.max) return p.max;
+  return n;
 }
 
 function Control({
@@ -136,17 +153,39 @@ function Control({
   value: Value;
   onChange: (v: Value) => void;
 }) {
+  const unit = param.unit ? ` ${param.unit}` : "";
   const label = (
     <div className="flex items-center justify-between text-gray-400">
       <span className="truncate" title={param.description}>
         {param.name}
       </span>
       {typeof value !== "boolean" && (
-        <span className="text-gray-300 ml-2 tabular-nums">{String(value)}</span>
+        <span className="text-gray-300 ml-2 tabular-nums">
+          {String(value)}
+          {unit}
+        </span>
       )}
     </div>
   );
 
+  return (
+    <div className="space-y-1">
+      {body(param, value, onChange, label)}
+      {param.description && (
+        <p className="text-[10px] text-gray-600 leading-tight">
+          {param.description}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function body(
+  param: Param,
+  value: Value,
+  onChange: (v: Value) => void,
+  label: React.ReactNode,
+): React.ReactNode {
   // Boolean → toggle.
   if (param.type === "boolean" || typeof value === "boolean") {
     return (
@@ -202,23 +241,21 @@ function Control({
     );
   }
 
-  // Bare number → numeric input (commit on Enter/blur).
+  // Bare number → numeric input (commit on Enter/blur, clamped to any bound).
   if (typeof value === "number") {
+    const commit = (raw: string) => onChange(clampNum(Number(raw), param));
     return (
       <label className="block space-y-1">
-        <span
-          className="text-gray-400 truncate block"
-          title={param.description}
-        >
-          {param.name}
-        </span>
+        {label}
         <input
           type="number"
           defaultValue={value}
+          min={param.min}
+          max={param.max}
           step={param.type === "integer" ? 1 : "any"}
-          onBlur={(e) => onChange(Number(e.target.value))}
+          onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") onChange(Number(e.currentTarget.value));
+            if (e.key === "Enter") commit(e.currentTarget.value);
           }}
           className="w-full bg-white/5 border border-white/10 rounded px-1.5 py-1 text-gray-200 focus:outline-none focus:border-white/30 tabular-nums"
         />
