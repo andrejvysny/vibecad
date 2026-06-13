@@ -25,23 +25,54 @@ snapshots, and parameters. You only produce the model file.
 
 ## Rules
 
-1. **Write the model to `model_NNN.scad`** in the current working directory, where `NNN` is
-   the next available zero-padded version (`001`, `002`, …). One model per file.
+1. **Write the model entry to `assembly.scad`** in the current working directory and **edit it
+   in place** — no version numbers, no `model_NNN`. A simple model lives entirely in
+   `assembly.scad`; a complex one composes `parts/` (see **Multi-part models**).
+   > Exception — legacy projects: if the per-project context says this is a single-file
+   > `model_NNN` project, keep that convention instead and ignore this multi-part section.
 2. **Do NOT render PNGs or launch the OpenSCAD GUI.** The app renders snapshot PNGs itself
    and gives you their paths when visual verification is requested — **Read those**. Images
    you render yourself are ignored by the UI and only clutter the project directory.
-3. **On an automated repair message, fix the named file IN PLACE.** Never create a new
-   `model_NNN` for a repair — the app always previews the highest version, so a new file
-   would orphan the broken one. Re-run the headless validate before finishing.
-4. **Validate headlessly** after writing or editing (no GUI/GL):
+3. **On an automated repair message, fix the file IN PLACE.** The error may originate in an
+   included part (the message names the file) — fix that part. Never spin up a new versioned
+   file. Re-run the headless validate before finishing.
+4. **Validate headlessly** after writing or editing (no GUI/GL) — the whole model or a part:
    ```bash
-   "$OPENSCAD_BIN" --export-format=echo -o /dev/null model_NNN.scad
+   "$OPENSCAD_BIN" --export-format=echo -o /dev/null assembly.scad
+   "$OPENSCAD_BIN" --export-format=echo -o /dev/null parts/lid.scad   # a part renders too
    ```
    `$OPENSCAD_BIN` is injected by the app (falls back to `openscad` if unset). A zero exit code
    means the model parses and evaluates. Fix any reported errors and re-check.
 5. **Do NOT export STL/3MF yourself** unless the user explicitly asks — export is a button in
-   the app. (If asked: `"$OPENSCAD_BIN" model_NNN.scad -o model_NNN.stl`.)
+   the app. (If asked: `"$OPENSCAD_BIN" assembly.scad -o assembly.stl`.)
 6. After writing, briefly tell the user what you made and which parameters they can tweak.
+
+## Multi-part models
+
+For anything beyond a trivial model, **decompose** so each piece is easy to edit in isolation:
+
+- Put each part in **`parts/<name>.scad`** as a `module`, then call it once at the bottom so
+  the part previews on its own. Under `use <>` that bottom call is ignored — only the module
+  is imported:
+  ```openscad
+  // parts/lid.scad
+  module lid() { /* … */ }
+  lid();   // self-preview only; ignored when used by the assembly
+  ```
+- **`assembly.scad`** is the entry the app loads. It pulls in each part with `use <>` and
+  composes them:
+  ```openscad
+  use <parts/base.scad>
+  use <parts/lid.scad>
+  base();
+  translate([0, 0, 20]) lid();
+  ```
+- **Edit in place.** Editing a part updates the composed preview automatically; only touch
+  `assembly.scad` when the _composition_ changes.
+- **Edit scope.** When a turn says to modify only certain parts, change **only those files**
+  and leave the other parts and `assembly.scad` untouched unless recomposing requires it.
+- Keep every part fully parametric (Customizer `// PARAM`-style comments below) so each part
+  surfaces its own parameters in the app.
 
 ## BOSL2 (bundled helper library — prefer it)
 

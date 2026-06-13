@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { useBackendStore } from "../../stores/backend.store";
 import { useProjectStore } from "../../stores/project.store";
+import { latestModelBase } from "../../stores/preview";
 import { useAgentStore } from "../../stores/agent.store";
 import { useViewStore } from "../../stores/view.store";
 import { useViewportStore } from "../../stores/viewport.store";
@@ -113,6 +114,11 @@ export function Preview({ project }: Props) {
   const mesh = resolveMesh(project);
   const meshPath = mesh?.path ?? null;
   const meshFormat = mesh?.format ?? null;
+  // Viewing a single part in isolation (render-only + accent highlight).
+  const activeKey = project?.activeModel ?? null;
+  const isolatedPart = activeKey?.startsWith("parts/")
+    ? activeKey.slice("parts/".length)
+    : null;
 
   // Set up the three.js scene once.
   useEffect(() => {
@@ -138,6 +144,12 @@ export function Preview({ project }: Props) {
   useEffect(() => {
     useSelectionStore.getState().bindModel(project?.activeModel ?? null);
   }, [project?.activeModel]);
+
+  // Tint the mesh with the accent when isolated to a part. The geometry load
+  // below is async, so this sync update lands before the material is rebuilt.
+  useEffect(() => {
+    viewerRef.current?.setHighlight(!!isolatedPart);
+  }, [isolatedPart, meshPath, meshVersion]);
 
   useEffect(() => {
     viewerRef.current?.setSettings({
@@ -388,6 +400,24 @@ export function Preview({ project }: Props) {
         {!empty && <AnnotationPalette />}
 
         {project && <ParamPanel project={project} />}
+
+        {/* Part isolation banner — viewing one part in isolation, with a way back. */}
+        {project && isolatedPart && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-xs text-amber-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            Isolated part: <span className="font-medium">{isolatedPart}</span>
+            <button
+              onClick={() => {
+                const base = latestModelBase(project.files);
+                if (base)
+                  useProjectStore.getState().setActiveModel(project.id, base);
+              }}
+              className="ml-1 px-1.5 py-0.5 rounded border border-amber-500/30 text-amber-200/90 hover:text-white hover:border-amber-300/50"
+            >
+              Show full model
+            </button>
+          </div>
+        )}
 
         {/* Dimension / scale HUD */}
         {!empty && dims && (

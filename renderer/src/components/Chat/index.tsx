@@ -118,13 +118,17 @@ export function Chat({ project }: Props) {
       selection = buildSelection(sel.pins, sel.box);
       sel.clearAll();
     }
+    const editScope = useProjectStore.getState().editScope;
     void run({
       prompt: text.trim(),
       projectId: project.id,
       attachments: atts,
       verify,
       selection,
+      editScope: editScope.length ? editScope : undefined,
     });
+    // Scope is per-turn — reset once the run is dispatched.
+    useProjectStore.getState().clearEditScope();
     setPrompt("");
     setAttachments([]);
   }
@@ -183,6 +187,7 @@ export function Chat({ project }: Props) {
             Open or create a project to start
           </p>
         )}
+        <EditScopeChip />
         {hasModel && !running && (
           <div className="flex flex-wrap gap-1.5 mb-2">
             {QUICK_ACTIONS.map((a) => (
@@ -295,6 +300,29 @@ export function Chat({ project }: Props) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Shows which parts the next turn is scoped to edit (multi-part). Prompt-guidance
+// only — the agent is asked to leave other parts untouched.
+function EditScopeChip() {
+  const editScope = useProjectStore((s) => s.editScope);
+  const clear = useProjectStore((s) => s.clearEditScope);
+  if (editScope.length === 0) return null;
+  const names = editScope.map((p) =>
+    p.replace(/^parts\//, "").replace(/\.(py|scad)$/, ""),
+  );
+  return (
+    <div className="flex items-center gap-2 mb-2 px-2 py-1 rounded-md border border-blue-500/30 bg-blue-500/[0.08] text-[11px] text-blue-300">
+      <span className="truncate">Editing: {names.join(", ")}</span>
+      <button
+        onClick={clear}
+        title="Edit the whole model"
+        className="ml-auto text-blue-300/60 hover:text-blue-200"
+      >
+        ×
+      </button>
     </div>
   );
 }

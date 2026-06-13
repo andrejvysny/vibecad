@@ -8,6 +8,9 @@ Usage:
   python render_harness.py <model.py> --diagnostics   # JSON B-rep report to stdout
 
 Contract: the model assigns its final solid to a top-level variable `result`.
+Multi-part models: the entry (assembly.py) may compose parts via
+`from parts.<name> import result as <alias>` — the project dir is on sys.path, so
+`parts/` resolves as an implicit namespace package (no __init__.py needed).
 """
 import argparse
 import importlib.util

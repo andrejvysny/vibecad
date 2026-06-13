@@ -1,19 +1,39 @@
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import log from "electron-log/main";
 import { getBackend } from "./modeling/index.js";
 import { getProject, type ProjectRow } from "./projects.js";
 import { sendToRenderer } from "./window.js";
 import type { CameraPreset, ModelingBackend } from "../../../shared/types.js";
 
-/** The newest model_NNN source file in a project, or null. */
+/**
+ * The model entry to drive preview/validation. Multi-part projects use a stable
+ * `assembly.{ext}` entry (preferred when present); legacy single-file projects
+ * fall back to the newest `model_NNN.{ext}`.
+ */
 export async function latestModel(project: ProjectRow): Promise<string | null> {
   const ext = project.modelingBackend === "openscad" ? ".scad" : ".py";
-  const latest = (await readdir(project.dir))
+  const entries = await readdir(project.dir);
+  const assembly = `assembly${ext}`;
+  if (entries.includes(assembly)) return join(project.dir, assembly);
+  const latest = entries
     .filter((f) => /^model_\d+/.test(f) && f.endsWith(ext))
     .sort()
     .at(-1);
   return latest ? join(project.dir, latest) : null;
+}
+
+/** Absolute paths of a project's part source files (`parts/*.{ext}`), or []. */
+export async function listPartSources(project: ProjectRow): Promise<string[]> {
+  const ext = project.modelingBackend === "openscad" ? ".scad" : ".py";
+  try {
+    const files = await readdir(join(project.dir, "parts"));
+    return files
+      .filter((f) => f.endsWith(ext))
+      .map((f) => join(project.dir, "parts", f));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -83,7 +103,9 @@ export async function renderSnapshots(
   try {
     const pngs = await backend.render({
       modelPath,
-      outDir: project.dir,
+      // Write snapshots beside the source so a part's PNGs group with it
+      // (parts/lid.py → parts/lid_iso.png); the assembly/legacy entry → root.
+      outDir: dirname(modelPath),
       cameras,
       size: [800, 600],
     });

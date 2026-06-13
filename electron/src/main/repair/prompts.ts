@@ -40,9 +40,23 @@ Failed check: ${input.gate}
 Errors:
 ${errors}${warnings}
 
-Fix ${base} IN PLACE — do not create a new model_NNN file for a repair.
+Fix ${base} IN PLACE — do not create a new versioned file for a repair. The
+error may originate in an imported part (a file named in the traceback/stderr);
+if so, fix that part file in place.
 Re-run the headless validation command from your skill before finishing.
 Reply with a one-line summary of what was wrong and what you changed.`;
+}
+
+/**
+ * Per-turn multi-part edit scope, prepended to the user's prompt (prompt-guidance
+ * only — not enforced). Pure/testable. `parts` are project-relative source paths.
+ */
+export function buildEditScopePrompt(parts: string[]): string {
+  const list = parts.map((p) => `- ${p}`).join("\n");
+  return `Edit scope — modify ONLY these part files this turn:
+${list}
+Leave every other part and the assembly entry unchanged, unless recomposing
+strictly requires editing the assembly. Do not create new parts this turn.`;
 }
 
 /**

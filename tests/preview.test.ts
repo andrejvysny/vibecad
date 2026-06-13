@@ -24,8 +24,18 @@ describe("latestModelBase", () => {
   });
 
   it("compares numeric suffixes, not lexicographic filenames", () => {
-    expect(latestModelBase(["model_9.scad", "model_10.scad"])).toBe(
-      "model_10",
+    expect(latestModelBase(["model_9.scad", "model_10.scad"])).toBe("model_10");
+  });
+
+  it("prefers the stable assembly entry for multi-part projects", () => {
+    expect(
+      latestModelBase(["assembly.py", "parts/base.py", "parts/lid.py"]),
+    ).toBe("assembly");
+  });
+
+  it("prefers assembly even when legacy model_NNN files coexist", () => {
+    expect(latestModelBase(["model_005.scad", "assembly.scad"])).toBe(
+      "assembly",
     );
   });
 });

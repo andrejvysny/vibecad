@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { SelectionFeedback } from "../../../shared/ipc.js";
 
@@ -71,6 +71,14 @@ async function listDir(path: string): Promise<string[]> {
   }
 }
 
+async function dirExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Assemble the per-project agent context (spec §11 plus user-authored
  * instructions/skills/references). Every source is a file under
@@ -104,6 +112,18 @@ export async function buildAgentContext(
       `## Skill: ${project.modelingBackend}\n\n${bundledSkill.trim()}`,
     );
   }
+
+  // 2b. Project layout mode — disambiguates the skill's file contract. New
+  //     projects scaffold a `parts/` dir (multi-part); older ones predate it and
+  //     must keep their single-file `model_NNN` flow.
+  const multiPart = await dirExists(join(project.dir, "parts"));
+  sections.push(
+    multiPart
+      ? "## Project layout: multi-part\n\nThis project uses the stable `assembly" +
+          (project.modelingBackend === "openscad" ? ".scad" : ".py") +
+          "` entry + `parts/` layout described in the skill. Edit files in place; do not create `model_NNN` files."
+      : "## Project layout: legacy single-file\n\nThis is a legacy project — keep using the single-file `model_NNN` convention; ignore the skill's assembly/parts section. Do not create a `parts/` dir or an `assembly` file.",
+  );
 
   // 3. Custom/external skills layered on top.
   const customSkillsRoot = join(studioDir, "skills", "custom");
