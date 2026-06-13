@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import log from "electron-log/main";
 import { getAdapter, registerActive } from "./agents/index.js";
@@ -14,10 +15,19 @@ import {
 import { getSkillsDir } from "./paths.js";
 import { buildAgentContext } from "./agent-context.js";
 import { getWorkflow } from "./workflows.js";
-import { latestModel, renderSnapshots } from "./preview.js";
+import {
+  exportPartMeshes,
+  latestModel,
+  listPartSources,
+  renderSnapshots,
+} from "./preview.js";
 import { runGateChain } from "./repair/gates.js";
 import { decideNextAction } from "./repair/policy.js";
-import { buildRepairPrompt, buildVisionPrompt } from "./repair/prompts.js";
+import {
+  buildEditScopePrompt,
+  buildRepairPrompt,
+  buildVisionPrompt,
+} from "./repair/prompts.js";
 import { sendToRenderer } from "./window.js";
 import type { ProjectRow } from "./projects.js";
 import type {
@@ -81,6 +91,7 @@ export async function runAgentTurn(
   attachments?: string[],
   verify = false,
   selection?: SelectionFeedback,
+  editScope?: string[],
 ): Promise<{ stalled: boolean }> {
   const db = initDb();
   const [project] = db
@@ -110,7 +121,12 @@ export async function runAgentTurn(
   });
 
   const session = getOrCreateSession(projectId, project.agentId);
+  // Persist the user's own text; the agent receives a scope-prefixed copy so the
+  // chat history stays clean (multi-part edit scope, prompt-guidance only).
   insertMessage(session.id, "user", prompt, undefined, "chat");
+  const scopedPrompt = editScope?.length
+    ? `${buildEditScopePrompt(editScope)}\n\n${prompt}`
+    : prompt;
 
   const abort = new AbortController();
   turnAborts.set(projectId, abort);
@@ -124,7 +140,13 @@ export async function runAgentTurn(
     abort: abort.signal,
   };
   try {
-    return await runTurnPipeline(ctx, prompt, session.id, verify);
+    return await runTurnPipeline(
+      ctx,
+      scopedPrompt,
+      session.id,
+      verify,
+      editScope,
+    );
   } finally {
     turnAborts.delete(projectId);
   }
@@ -136,6 +158,7 @@ async function runTurnPipeline(
   prompt: string,
   sessionId: string,
   verify: boolean,
+  editScope?: string[],
 ): Promise<{ stalled: boolean }> {
   const { project, projectId } = ctx;
   const backend = getBackend(project.modelingBackend);
@@ -179,6 +202,28 @@ async function runTurnPipeline(
       if (vision.stalled) return failStall(projectId);
       if (vision.ranTurn) visionUsed = true;
       if (vision.changed) continue; // the vision edit re-enters the gate chain
+      // Per-part visual check for the parts the user scoped this turn — each part
+      // is a standalone model, so renderSnapshots/runVision work on it directly.
+      if (warranted && editScope?.length) {
+        let partChanged = false;
+        for (const part of editScope) {
+          const pv = await runVision(
+            ctx,
+            join(project.dir, part),
+            sessionId,
+            true,
+          );
+          if (pv.stalled) return failStall(projectId);
+          if (pv.changed) {
+            partChanged = true;
+            break;
+          }
+        }
+        if (partChanged) continue; // a part edit re-enters the gate chain
+      }
+      // Refresh standalone part meshes (missing/stale only) so each part can be
+      // previewed on its own. Token-free, best-effort — never blocks the turn.
+      await exportPartMeshes(project, backend);
       sendStatus({ projectId, phase: "ok" });
       return { stalled: false };
     }
@@ -420,7 +465,17 @@ async function modelStat(project: ProjectRow): Promise<ModelStat | null> {
   const path = await latestModel(project);
   if (!path) return null;
   try {
-    return { path, mtimeMs: (await stat(path)).mtimeMs };
+    // Take the newest mtime across the entry + every part source, so a part-only
+    // edit (entry untouched) still registers as a model change and runs the loop.
+    const sources = [path, ...(await listPartSources(project))];
+    const mtimes = await Promise.all(
+      sources.map((p) =>
+        stat(p)
+          .then((s) => s.mtimeMs)
+          .catch(() => 0),
+      ),
+    );
+    return { path, mtimeMs: Math.max(...mtimes) };
   } catch {
     return null;
   }

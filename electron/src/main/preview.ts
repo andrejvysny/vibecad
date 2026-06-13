@@ -1,19 +1,40 @@
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import log from "electron-log/main";
 import { getBackend } from "./modeling/index.js";
 import { getProject, type ProjectRow } from "./projects.js";
+import { isMeshStale } from "./preview-util.js";
 import { sendToRenderer } from "./window.js";
 import type { CameraPreset, ModelingBackend } from "../../../shared/types.js";
 
-/** The newest model_NNN source file in a project, or null. */
+/**
+ * The model entry to drive preview/validation. Multi-part projects use a stable
+ * `assembly.{ext}` entry (preferred when present); legacy single-file projects
+ * fall back to the newest `model_NNN.{ext}`.
+ */
 export async function latestModel(project: ProjectRow): Promise<string | null> {
   const ext = project.modelingBackend === "openscad" ? ".scad" : ".py";
-  const latest = (await readdir(project.dir))
+  const entries = await readdir(project.dir);
+  const assembly = `assembly${ext}`;
+  if (entries.includes(assembly)) return join(project.dir, assembly);
+  const latest = entries
     .filter((f) => /^model_\d+/.test(f) && f.endsWith(ext))
     .sort()
     .at(-1);
   return latest ? join(project.dir, latest) : null;
+}
+
+/** Absolute paths of a project's part source files (`parts/*.{ext}`), or []. */
+export async function listPartSources(project: ProjectRow): Promise<string[]> {
+  const ext = project.modelingBackend === "openscad" ? ".scad" : ".py";
+  try {
+    const files = await readdir(join(project.dir, "parts"));
+    return files
+      .filter((f) => f.endsWith(ext))
+      .map((f) => join(project.dir, "parts", f));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -36,6 +57,34 @@ export async function produceMesh(
     return { meshPath: path, stderr };
   }
   return { meshPath: await backend.export(modelPath, "stl"), stderr: "" };
+}
+
+/**
+ * Export the standalone preview mesh for every part whose mesh is missing or
+ * stale. Parts are independent models, so each previews on its own — this keeps
+ * `parts/<name>.{stl,step}` fresh after a turn (the fs watcher then surfaces them
+ * to the renderer). Best-effort and token-free: a part that's broken in isolation
+ * just gets skipped (logged), never failing the turn. No IPC push — the workspace
+ * watcher refreshes the file list.
+ */
+export async function exportPartMeshes(
+  project: ProjectRow,
+  backend: ModelingBackend,
+): Promise<void> {
+  const sourceExt = project.modelingBackend === "openscad" ? ".scad" : ".py";
+  const meshExt = project.modelingBackend === "build123d" ? ".step" : ".stl";
+  for (const src of await listPartSources(project)) {
+    try {
+      const meshPath = src.replace(new RegExp(`\\${sourceExt}$`), meshExt);
+      const srcMtime = (await stat(src)).mtimeMs;
+      const meshMtime = await stat(meshPath)
+        .then((s) => s.mtimeMs)
+        .catch(() => null);
+      if (isMeshStale(srcMtime, meshMtime)) await produceMesh(backend, src);
+    } catch (err) {
+      log.warn(`[preview] part mesh export failed for ${src}:`, err);
+    }
+  }
 }
 
 /**
@@ -83,7 +132,9 @@ export async function renderSnapshots(
   try {
     const pngs = await backend.render({
       modelPath,
-      outDir: project.dir,
+      // Write snapshots beside the source so a part's PNGs group with it
+      // (parts/lid.py → parts/lid_iso.png); the assembly/legacy entry → root.
+      outDir: dirname(modelPath),
       cameras,
       size: [800, 600],
     });

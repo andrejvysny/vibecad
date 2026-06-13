@@ -68,6 +68,8 @@ interface RunPayload {
   verify?: boolean;
   // Pins/region the user marked on the 3D model this turn.
   selection?: SelectionFeedback;
+  // Multi-part edit scope: part files to restrict edits to this turn.
+  editScope?: string[];
 }
 
 interface AgentStore {
@@ -149,7 +151,14 @@ export const useAgentStore = create<AgentStore>((set, get) => {
       set({ detected: agents, activeAgentId: active?.id ?? null });
     },
 
-    async run({ prompt, projectId, attachments, verify, selection }) {
+    async run({
+      prompt,
+      projectId,
+      attachments,
+      verify,
+      selection,
+      editScope,
+    }) {
       const userMsg: ChatMessage = {
         id: uid(),
         role: "user",
@@ -177,6 +186,7 @@ export const useAgentStore = create<AgentStore>((set, get) => {
           attachments,
           verify,
           selection,
+          editScope,
         });
       } catch (err) {
         get().pushEvent({

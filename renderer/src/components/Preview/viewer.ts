@@ -27,6 +27,10 @@ import {
 } from "./viewerThree";
 
 const BG = 0x0a0d12;
+// Accent tint applied when the viewer is isolated to a single part, so a selected
+// part reads as "highlighted" vs. the neutral assembly material.
+const HIGHLIGHT_COLOR = 0xffb347;
+const HIGHLIGHT_EMISSIVE = 0x3a2a10;
 const ORBIT_SENS = 0.4;
 const ORBIT_DRAG_SENS = 1.0;
 const CREASE_ANGLE = (35 * Math.PI) / 180;
@@ -98,6 +102,8 @@ export class Viewer {
   private ro: ResizeObserver;
   private edgesVisible = true;
   private gridVisible = true;
+  // When true, the current mesh is tinted with the highlight accent (part isolation).
+  private highlighted = false;
   private drag: "orbit" | "pan" | null = null;
   private bounds = { x: 0, y: 0, z: 0 };
   private gridCell = 0;
@@ -424,9 +430,7 @@ export class Viewer {
 
     this.mesh = new THREE.Mesh(
       shaded,
-      new THREE.MeshStandardMaterial(
-        materialParams(this.settings.materialPreset),
-      ),
+      new THREE.MeshStandardMaterial(this.meshMaterialParams()),
     );
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
@@ -471,15 +475,35 @@ export class Viewer {
     this.mesh.add(this.edges);
   }
 
+  /** Base material for the current preset, tinted with the accent when isolated. */
+  private meshMaterialParams(): THREE.MeshStandardMaterialParameters {
+    const base = materialParams(this.settings.materialPreset);
+    if (!this.highlighted) return base;
+    return {
+      ...base,
+      color: HIGHLIGHT_COLOR,
+      emissive: HIGHLIGHT_EMISSIVE,
+      emissiveIntensity: 0.8,
+    };
+  }
+
   private applyMaterial(): void {
     if (this.mesh?.material instanceof THREE.MeshStandardMaterial) {
-      this.mesh.material.setValues(
-        materialParams(this.settings.materialPreset),
-      );
+      // Reset emissive first — setValues won't clear it when toggling off highlight.
+      this.mesh.material.emissive.setHex(0x000000);
+      this.mesh.material.emissiveIntensity = 1;
+      this.mesh.material.setValues(this.meshMaterialParams());
       this.mesh.material.needsUpdate = true;
     }
     if (this.edges?.material instanceof THREE.LineBasicMaterial)
       this.edges.material.color.setHex(edgeColor(this.settings.materialPreset));
+  }
+
+  /** Tint the current mesh with the accent (used when isolated to a part). */
+  setHighlight(on: boolean): void {
+    if (this.highlighted === on) return;
+    this.highlighted = on;
+    this.applyMaterial();
   }
 
   private layoutGround(baseZ: number, footprint: number): void {

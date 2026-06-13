@@ -11,6 +11,7 @@ import type {
   ReadModelPayload,
   RevealPayload,
   ImportStepPayload,
+  DeletePartPayload,
   CreateProjectPayload,
   GetProjectPayload,
   ReadInstructionsPayload,
@@ -86,6 +87,8 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("model:read", payload),
   importStep: (payload: ImportStepPayload): Promise<string | null> =>
     ipcRenderer.invoke("model:import-step", payload),
+  deletePart: (payload: DeletePartPayload): Promise<string> =>
+    ipcRenderer.invoke("project:delete-part", payload),
   revealItem: (payload: RevealPayload): Promise<void> =>
     ipcRenderer.invoke("shell:reveal", payload),
 

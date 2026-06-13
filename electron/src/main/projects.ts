@@ -69,6 +69,10 @@ export async function createProject(
   mkdirSync(join(studioDir, "workflows"), { recursive: true });
   writeFileSync(join(studioDir, "instructions.md"), INSTRUCTIONS_TEMPLATE);
 
+  // Multi-part layout: a `parts/` dir marks the project as using the stable
+  // `assembly.{ext}` + parts/ contract (vs. legacy single-file `model_NNN`).
+  mkdirSync(join(dir, "parts"), { recursive: true });
+
   const now = new Date();
   const row: ProjectRow = {
     id,
@@ -197,6 +201,20 @@ export function addReference(id: string, srcPath: string): string {
 export function removeReference(id: string, name: string): void {
   const root = join(getStudioDir(id), "references");
   removeWithin(root, join(root, safeName(name)));
+}
+
+/** Delete one multi-part source file (`parts/<name>.{py,scad}`). Guarded to the
+ *  project's `parts/` dir so a crafted path can't escape it. Returns the path. */
+export function deletePart(id: string, part: string): string {
+  const row = getProject(id);
+  if (!row) throw new Error(`Project not found: ${id}`);
+  const partsRoot = resolve(row.dir, "parts");
+  const target = resolve(row.dir, part);
+  if (target !== partsRoot && !target.startsWith(partsRoot + sep)) {
+    throw new Error(`Not a part file: ${part}`);
+  }
+  rmSync(target, { force: true });
+  return part;
 }
 
 export function getProject(id: string): ProjectRow | undefined {

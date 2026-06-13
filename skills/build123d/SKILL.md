@@ -23,27 +23,63 @@ export, snapshots, parameters. You only produce the model file.
 
 ## Rules
 
-1. **Write the model to `model_NNN.py`** in the current working directory (`NNN` = next
-   zero-padded version). One model per file.
+1. **Write the model entry to `assembly.py`** in the current working directory and **edit it
+   in place** — no version numbers, no `model_NNN`. A simple model lives entirely in
+   `assembly.py`; a complex one composes `parts/` (see **Multi-part models**).
+   > Exception — legacy projects: if the per-project context says this is a single-file
+   > `model_NNN` project, keep that convention instead and ignore this multi-part section.
 2. The final solid **must** be assigned to a top-level variable named `result`:
    ```python
    result = part.part   # the app's harness requires this
    ```
 3. **Do NOT render PNGs.** The app renders the preview and the snapshot PNGs itself and gives
    you their paths when visual verification is requested — **Read those**.
-4. **On an automated repair message, fix the named file IN PLACE.** Never create a new
-   `model_NNN` for a repair — the app previews the highest version, so a new file orphans the
-   broken one. Re-run `--check` before finishing.
-5. **Validate headlessly** after writing or editing:
+4. **On an automated repair message, fix the file IN PLACE.** The error may originate in an
+   imported part (the traceback names the file) — fix that part. Never spin up a new versioned
+   file. Re-run `--check` before finishing.
+5. **Validate headlessly** after writing or editing — the whole model or a single part:
    ```bash
-   python render_harness.py model_NNN.py --check
+   python render_harness.py assembly.py     --check
+   python render_harness.py parts/lid.py    --check   # a part is a standalone model too
    ```
    A zero exit code means `result` builds. Fix any reported errors and re-check.
 6. **Export only when the user explicitly asks** (it's a button in the app):
    ```bash
-   python render_harness.py model_NNN.py --export step --out model_NNN.step
-   python render_harness.py model_NNN.py --export stl  --out model_NNN.stl
+   python render_harness.py assembly.py --export step --out assembly.step
+   python render_harness.py assembly.py --export stl  --out assembly.stl
    ```
+
+## Multi-part models
+
+For anything beyond a trivial single solid, **decompose** the model so each piece is easy to
+reason about and edit in isolation:
+
+- Put each part in **`parts/<name>.py`**. A part is a _normal model_: parametric, annotated,
+  and ending in its own top-level `result`.
+- **`assembly.py`** is the entry the app loads. It imports each part and composes the final
+  `result`:
+
+  ```python
+  from parts.base import result as base
+  from parts.lid  import result as lid
+  from build123d import Pos
+
+  result = base + lid.moved(Pos(0, 0, 20))   # the harness loads `result` from here
+  ```
+
+  (`parts/` is on `sys.path`, so `from parts.<name> import …` just works — no `__init__.py`.)
+
+- **Shared helpers.** Prefer the bundled `from helpers import …`. If you need your own shared
+  code, put it in a module at the **project root** (e.g. `studio_helpers.py`) and
+  `from studio_helpers import …` — the root is on `sys.path` for both `assembly.py` **and**
+  every `parts/<name>.py`, so each part still loads standalone.
+- **Edit in place.** Editing a part automatically updates the composed preview; you do not
+  re-create the assembly unless the _composition_ changes.
+- **Edit scope.** When a turn says to modify only certain parts, change **only those files**
+  and leave the other parts and `assembly.py` untouched unless recomposing strictly requires
+  editing the assembly.
+- Each part previews and reports parameters on its own in the app, so keep every part fully
+  parametric with `# PARAM` annotations (below).
 
 ## House style
 

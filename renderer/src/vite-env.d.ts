@@ -78,6 +78,7 @@ interface ElectronAPI {
     attachments?: string[];
     verify?: boolean;
     selection?: SelectionFeedback;
+    editScope?: string[];
   }): Promise<void>;
   stopAgent(payload: { projectId: string }): Promise<void>;
   chatHistory(payload: { projectId: string }): Promise<ChatMessageRecord[]>;
@@ -110,6 +111,7 @@ interface ElectronAPI {
   readModel(payload: { path: string }): Promise<string>;
   revealItem(payload: { path: string }): Promise<void>;
   importStep(payload: { projectId: string }): Promise<string | null>;
+  deletePart(payload: { projectId: string; part: string }): Promise<string>;
   // Project
   createProject(payload: {
     name: string;

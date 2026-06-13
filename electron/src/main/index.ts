@@ -24,6 +24,7 @@ import { initDb } from "./db/index.js";
 import {
   addReference,
   createProject,
+  deletePart,
   deleteProject,
   getProject,
   getWorkspaceRoot,
@@ -42,7 +43,11 @@ import {
 } from "./projects.js";
 import { listMessages, resetSessionAgent } from "./chat.js";
 import { deleteWorkflow, listWorkflows, saveWorkflow } from "./workflows.js";
-import { unwatchProject, watchProject } from "./workspace.js";
+import {
+  enumerateProjectFiles,
+  unwatchProject,
+  watchProject,
+} from "./workspace.js";
 import { getSkillsBase } from "./paths.js";
 import { abortTurn, runAgentTurn, runWorkflow } from "./agent-run.js";
 import { exportPreviewMesh, latestModel } from "./preview.js";
@@ -57,6 +62,7 @@ import type {
   ReadModelPayload,
   RevealPayload,
   ImportStepPayload,
+  DeletePartPayload,
   CreateProjectPayload,
   GetProjectPayload,
   ReadInstructionsPayload,
@@ -140,7 +146,7 @@ async function setActiveWatch(projectId: string, dir: string): Promise<void> {
   // Emit the current contents immediately so previews populate without waiting
   // for the next fs event.
   try {
-    emitFiles(projectId, await readdir(dir));
+    emitFiles(projectId, await enumerateProjectFiles(dir));
   } catch (err) {
     log.error("[workspace] initial readdir failed:", err);
   }
@@ -253,6 +259,7 @@ ipcMain.handle("agent:run", async (_e, payload: RunAgentPayload) => {
     payload.attachments,
     payload.verify ?? false,
     payload.selection,
+    payload.editScope,
   );
 });
 
@@ -588,6 +595,10 @@ ipcMain.handle("project:delete", (_e, payload: DeleteProjectPayload) => {
   }
   deleteProject(payload.id);
   return { id: payload.id };
+});
+
+ipcMain.handle("project:delete-part", (_e, payload: DeletePartPayload) => {
+  return deletePart(payload.projectId, payload.part);
 });
 
 // ──── IPC: app ───────────────────────────────────────────────────────────────

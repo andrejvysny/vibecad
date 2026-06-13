@@ -28,9 +28,14 @@ interface ProjectStore {
   // Bumped whenever a preview mesh is re-exported, to force the viewer to reload
   // even when the STL filename is unchanged.
   meshVersion: number;
+  // Multi-part edit scope: project-relative part source paths the next agent turn
+  // should restrict edits to. Transient (reset on project switch + after a run).
+  editScope: string[];
   setActive(id: string): void;
   setFiles(projectId: string, files: string[]): void;
   setActiveModel(projectId: string, base: string): void;
+  toggleEditScope(part: string): void;
+  clearEditScope(): void;
   bumpMesh(): void;
   addProject(project: Project): void;
   loadProjects(): Promise<void>;
@@ -50,10 +55,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   activeProjectId: null,
   activeProject: null,
   meshVersion: 0,
+  editScope: [],
 
   setActive(id) {
     const project = get().projects.find((p) => p.id === id) ?? null;
-    set({ activeProjectId: id, activeProject: project });
+    // Edit scope is per-session UI state; drop it when switching projects.
+    set({ activeProjectId: id, activeProject: project, editScope: [] });
     if (project) {
       localStorage.setItem(LAST_PROJECT_KEY, id);
       void window.api.openProject({ id });
@@ -88,6 +95,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
         activeProject: s.activeProject ? apply(s.activeProject) : null,
       };
     });
+  },
+
+  toggleEditScope(part) {
+    set((s) => ({
+      editScope: s.editScope.includes(part)
+        ? s.editScope.filter((p) => p !== part)
+        : [...s.editScope, part],
+    }));
+  },
+
+  clearEditScope() {
+    set({ editScope: [] });
   },
 
   bumpMesh() {

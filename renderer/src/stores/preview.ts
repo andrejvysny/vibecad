@@ -1,8 +1,12 @@
 /**
- * From a project's file list, return the highest-versioned `model_NNN` source
- * basename (e.g. "model_003"), or null if none exist. Padding-agnostic.
+ * The default preview target key for a project's files. Multi-part projects use
+ * a stable `assembly` entry (preferred when present); legacy projects fall back
+ * to the highest-versioned `model_NNN` source basename. null when neither
+ * exists. Padding-agnostic. The returned key is used to derive sibling paths
+ * (`<key>.stl`, `<key>_iso.png`, …) so it may include a `parts/` prefix.
  */
 export function latestModelBase(files: string[]): string | null {
+  if (files.some((f) => /^assembly\.(?:scad|py)$/.test(f))) return "assembly";
   let bestNum = -1;
   let best: string | null = null;
   for (const f of files) {

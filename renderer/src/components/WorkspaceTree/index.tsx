@@ -1,55 +1,18 @@
 import { useState } from "react";
 import { useProjectStore } from "../../stores/project.store";
+import { useAgentStore } from "../../stores/agent.store";
 import { useViewStore } from "../../stores/view.store";
 import { cn } from "../../lib/cn";
+import {
+  buildGroups,
+  basename,
+  DISPLAYABLE,
+  ext,
+  modelNum,
+  previewLabel,
+  type Group,
+} from "./groups";
 import type { Project } from "../../stores/project.store";
-
-const SOURCE_EXTS = new Set([".scad", ".py"]);
-const PREVIEW_EXTS = new Set([".png"]);
-const EXPORT_EXTS = new Set([".stl", ".3mf", ".step", ".dxf"]);
-// Formats the 3D viewer can load directly; others just reveal in the OS.
-const DISPLAYABLE = new Set([".stl", ".step"]);
-
-function ext(filename: string): string {
-  return filename.slice(filename.lastIndexOf("."));
-}
-function basename(filename: string): string {
-  return filename.slice(0, filename.lastIndexOf("."));
-}
-// Group key: every artifact of one model shares its `model_NNN` prefix.
-function groupKey(f: string): string {
-  return /^(model_\d+)/.exec(f)?.[1] ?? basename(f);
-}
-function modelNum(key: string): number {
-  return Number(/^model_(\d+)/.exec(key)?.[1] ?? -1);
-}
-
-interface Group {
-  key: string;
-  source?: string;
-  exports: string[];
-  previews: string[];
-}
-
-function buildGroups(files: string[]): Group[] {
-  const map = new Map<string, Group>();
-  const get = (k: string): Group => {
-    let g = map.get(k);
-    if (!g) {
-      g = { key: k, exports: [], previews: [] };
-      map.set(k, g);
-    }
-    return g;
-  };
-  for (const f of files) {
-    const e = ext(f);
-    const g = get(groupKey(f));
-    if (SOURCE_EXTS.has(e)) g.source = f;
-    else if (EXPORT_EXTS.has(e)) g.exports.push(f);
-    else if (PREVIEW_EXTS.has(e)) g.previews.push(f);
-  }
-  return [...map.values()].sort((a, b) => modelNum(b.key) - modelNum(a.key));
-}
 
 interface Props {
   project: Project | null;
@@ -68,6 +31,13 @@ export function WorkspaceTree({ project }: Props) {
   }
 
   const groups = buildGroups(project.files);
+  const assembly = groups.find((g) => g.kind === "assembly");
+  const parts = groups
+    .filter((g) => g.kind === "part")
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const legacy = groups
+    .filter((g) => g.kind === "legacy")
+    .sort((a, b) => modelNum(b.key) - modelNum(a.key));
 
   const projectId = project.id;
   async function importStep() {
@@ -78,6 +48,8 @@ export function WorkspaceTree({ project }: Props) {
     useViewStore.getState().show3d();
   }
 
+  const empty = !assembly && parts.length === 0 && legacy.length === 0;
+
   return (
     <div className="flex flex-col h-full">
       <Header
@@ -86,18 +58,155 @@ export function WorkspaceTree({ project }: Props) {
         {project.name}
       </Header>
       <div className="flex-1 overflow-y-auto py-1">
-        {groups.length === 0 && (
+        {empty && (
           <p className="px-3 py-1 text-xs text-gray-600">No models yet</p>
         )}
-        {groups.map((g) => (
+        {assembly && (
           <GroupRow
-            key={g.key}
+            key={assembly.key}
             project={project}
-            group={g}
-            active={project.activeModel === g.key}
+            group={assembly}
+            label="assembly"
+            active={project.activeModel === assembly.key}
           />
-        ))}
+        )}
+        {parts.length > 0 && (
+          <>
+            <SectionLabel>Parts</SectionLabel>
+            {parts.map((g) => (
+              <PartRow
+                key={g.key}
+                project={project}
+                group={g}
+                active={project.activeModel === g.key}
+              />
+            ))}
+          </>
+        )}
+        {legacy.length > 0 && (
+          <>
+            {(assembly || parts.length > 0) && (
+              <SectionLabel>Models</SectionLabel>
+            )}
+            {legacy.map((g) => (
+              <GroupRow
+                key={g.key}
+                project={project}
+                group={g}
+                label={g.key}
+                active={project.activeModel === g.key}
+              />
+            ))}
+          </>
+        )}
       </div>
+    </div>
+  );
+}
+
+// A part: checkbox toggles it into the next turn's edit scope; the name inspects
+// it (each part is a standalone model with its own preview + params); × removes
+// the file and asks the agent to drop it from the assembly.
+function PartRow({
+  project,
+  group,
+  active,
+}: {
+  project: Project;
+  group: Group;
+  active: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const editScope = useProjectStore((s) => s.editScope);
+  const toggleScope = useProjectStore((s) => s.toggleEditScope);
+  const scoped = !!group.source && editScope.includes(group.source);
+  const name = group.key.replace(/^parts\//, "");
+
+  // Always open the part in 3D — the viewport lazily exports its mesh if none
+  // exists yet. The source stays reachable via the expanded row's source leaf.
+  function inspect() {
+    useProjectStore.getState().setActiveModel(project.id, group.key);
+    useViewStore.getState().show3d();
+  }
+
+  async function remove() {
+    if (!group.source) return;
+    await window.api.deletePart({ projectId: project.id, part: group.source });
+    if (scoped) toggleScope(group.source);
+    void useAgentStore.getState().run({
+      prompt: `I removed the "${name}" part (${group.source}). Update the assembly to drop its reference and recompose so the model still builds.`,
+      projectId: project.id,
+    });
+  }
+
+  return (
+    <div>
+      <div
+        className={cn(
+          "flex items-center gap-1 px-2 py-0.5 text-xs",
+          active ? "bg-white/10" : "hover:bg-white/5",
+        )}
+      >
+        <input
+          type="checkbox"
+          checked={scoped}
+          disabled={!group.source}
+          onChange={() => group.source && toggleScope(group.source)}
+          title="Restrict the next edit to this part"
+          className="shrink-0 accent-blue-500"
+        />
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="grid place-items-center w-4 h-4 text-gray-500 hover:text-gray-300 shrink-0"
+        >
+          <Chevron open={open} />
+        </button>
+        <button
+          onClick={inspect}
+          className="flex-1 text-left truncate text-gray-200"
+        >
+          {name}
+        </button>
+        <button
+          onClick={() => void remove()}
+          title="Remove this part"
+          className="shrink-0 px-1 text-gray-600 hover:text-red-400"
+        >
+          ×
+        </button>
+      </div>
+      {open && (
+        <div className="pl-10 pr-2 pb-0.5">
+          {group.source && (
+            <Leaf
+              label={ext(group.source).slice(1)}
+              color="text-blue-300"
+              onClick={() => {
+                useProjectStore
+                  .getState()
+                  .setActiveModel(project.id, group.key);
+                useViewStore.getState().showSource(group.source!);
+              }}
+            />
+          )}
+          {group.exports.map((f) => (
+            <Leaf
+              key={f}
+              label={ext(f).slice(1)}
+              color="text-green-300"
+              onClick={() => openExport(project, group, f)}
+            />
+          ))}
+          {group.previews.map((f) => (
+            <Leaf
+              key={f}
+              label={previewLabel(f, group.key)}
+              color="text-gray-400"
+              onClick={() => useViewStore.getState().showImage(f)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -105,10 +214,12 @@ export function WorkspaceTree({ project }: Props) {
 function GroupRow({
   project,
   group,
+  label,
   active,
 }: {
   project: Project;
   group: Group;
+  label: string;
   active: boolean;
 }) {
   const [open, setOpen] = useState(active);
@@ -119,15 +230,6 @@ function GroupRow({
     useProjectStore.getState().setActiveModel(project.id, group.key);
     if (hasMesh) useViewStore.getState().show3d();
     else if (group.source) useViewStore.getState().showSource(group.source);
-  }
-
-  function openExport(f: string) {
-    if (DISPLAYABLE.has(ext(f))) {
-      useProjectStore.getState().setActiveModel(project.id, basename(f));
-      useViewStore.getState().show3d();
-    } else {
-      void window.api.revealItem({ path: `${project.dir}/${f}` });
-    }
   }
 
   return (
@@ -148,7 +250,7 @@ function GroupRow({
           onClick={select}
           className="flex-1 text-left truncate text-gray-200"
         >
-          {group.key}
+          {label}
         </button>
         {active && (
           <span className="text-[9px] uppercase tracking-wide text-blue-400/80 shrink-0">
@@ -160,7 +262,7 @@ function GroupRow({
         <div className="pl-6 pr-2 pb-0.5">
           {group.source && (
             <Leaf
-              label={ext(group.source)}
+              label={ext(group.source).slice(1)}
               color="text-blue-300"
               onClick={() => {
                 useProjectStore
@@ -175,7 +277,7 @@ function GroupRow({
               key={f}
               label={ext(f).slice(1)}
               color="text-green-300"
-              onClick={() => openExport(f)}
+              onClick={() => openExport(project, group, f)}
             />
           ))}
           {group.previews.map((f) => (
@@ -192,10 +294,21 @@ function GroupRow({
   );
 }
 
-// `model_002_iso.png` → `iso` (the render angle), else the bare filename.
-function previewLabel(file: string, key: string): string {
-  const m = new RegExp(`^${key}_(\\w+)\\.png$`).exec(file);
-  return m ? m[1]! : file;
+function openExport(project: Project, group: Group, f: string) {
+  if (DISPLAYABLE.has(ext(f))) {
+    useProjectStore.getState().setActiveModel(project.id, group.key);
+    useViewStore.getState().show3d();
+  } else {
+    void window.api.revealItem({ path: `${project.dir}/${f}` });
+  }
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="px-3 pt-2 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
+      {children}
+    </div>
+  );
 }
 
 function Leaf({

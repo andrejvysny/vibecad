@@ -23,6 +23,9 @@ export type RunAgentPayload = {
   // Manual feedback the user drew on the 3D model this turn (pins / region).
   // Coords are in model space (mm). The annotated screenshot rides in `attachments`.
   selection?: SelectionFeedback;
+  // Multi-part edit scope: project-relative part source paths the agent should
+  // restrict edits to (e.g. ["parts/lid.py"]). Empty/undefined ⇒ whole model.
+  editScope?: string[];
 };
 // User-placed pins and an optional region-of-interest box, captured from the
 // 3D viewer. Injected into the agent preamble as a "Manual feedback" section.
@@ -65,6 +68,9 @@ export type RevealPayload = { path: string };
 // Pick an external STEP file and copy it into the project; returns the new
 // project-relative filename.
 export type ImportStepPayload = { projectId: string };
+// Delete a single multi-part source file (`parts/<name>.{py,scad}`) from a
+// project. `part` is the project-relative path. Returns the deleted path.
+export type DeletePartPayload = { projectId: string; part: string };
 
 // Serializable project row sent across IPC (no Date fields).
 export type ProjectRecord = {
